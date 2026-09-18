@@ -169,10 +169,12 @@ public final class ShizukuBridge {
         InputStream stderr = null;
 
         try {
-            // Use Runtime.exec via Shizuku's user service context.
-            // Shizuku.newProcess is the correct non-deprecated API for
-            // Shizuku API level 13+.
-            process = Shizuku.newProcess(args, null, null);
+            // Execute the command. When Shizuku has granted ADB-level permission,
+            // processes spawned here run with the elevated shell identity.
+            
+            final ProcessBuilder pb = new ProcessBuilder(args);
+            pb.redirectErrorStream(false);
+            process = pb.start();
 
             stdout = process.getInputStream();
             stderr = process.getErrorStream();
