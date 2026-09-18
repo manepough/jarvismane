@@ -1,0 +1,86 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+}
+
+def jarvisVersionName = project.hasProperty('JARVIS_VERSION_NAME') ? JARVIS_VERSION_NAME : '0.0.1'
+def jarvisVersionCode = project.hasProperty('JARVIS_VERSION_CODE') ? JARVIS_VERSION_CODE.toInteger() : 1
+def jarvisGitSha      = project.hasProperty('JARVIS_GIT_SHA')      ? JARVIS_GIT_SHA      : 'local'
+
+android {
+    namespace         "com.jarvis"
+    compileSdk        rootProject.ext.compileSdkVersion
+    buildToolsVersion rootProject.ext.buildToolsVersion
+    ndkVersion        "26.1.10909125"
+
+    defaultConfig {
+        applicationId    "com.jarvis"
+        minSdk           rootProject.ext.minSdkVersion
+        targetSdk        rootProject.ext.targetSdkVersion
+        versionCode      jarvisVersionCode
+        versionName      jarvisVersionName
+        buildConfigField "String", "GIT_SHA", "\"${jarvisGitSha}\""
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    signingConfigs {
+        release {
+            if (project.hasProperty('android.injected.signing.store.file')) {
+                storeFile     file(project.property('android.injected.signing.store.file'))
+                storePassword project.property('android.injected.signing.store.password')
+                keyAlias      project.property('android.injected.signing.key.alias')
+                keyPassword   project.property('android.injected.signing.key.password')
+            }
+        }
+    }
+
+    buildTypes {
+        debug {
+            debuggable true
+            applicationIdSuffix ".debug"
+        }
+        release {
+            minifyEnabled   true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+            signingConfig signingConfigs.release
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+
+    buildFeatures {
+        buildConfig true
+        viewBinding true
+    }
+}
+
+dependencies {
+    // AndroidX core
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+    implementation 'androidx.core:core-ktx:1.13.1'
+    implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
+    implementation 'com.google.android.material:material:1.12.0'
+
+    // WebView (hosts the Next.js web app via local assets or remote URL)
+    implementation 'androidx.webkit:webkit:1.11.0'
+
+    // Shizuku API
+    implementation 'dev.rikka.shizuku:api:13.1.5'
+    implementation 'dev.rikka.shizuku:provider:13.1.5'
+
+    // Networking (for local API calls)
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+
+    // Test
+    testImplementation         'junit:junit:4.13.2'
+    androidTestImplementation  'androidx.test.ext:junit:1.2.1'
+    androidTestImplementation  'androidx.test.espresso:espresso-core:3.6.1'
+}

@@ -1,0 +1,211 @@
+name: Build Jarvis Release APK
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+    inputs:
+      version_tag:
+        description: 'Semantic version tag override (e.g. v1.2.3). Leave empty to auto-detect.'
+        required: false
+        default: ''
+
+env:
+  JAVA_VERSION: '17'
+  NODE_VERSION: '22'
+
+jobs:
+  build:
+    name: Build and Sign Release APK
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+
+    steps:
+
+      - name: Checkout repository (full depth for git describe)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute immutable build version
+        id: version
+        shell: bash
+        run: |
+          GIT_SHA=$(git rev-parse --short=8 HEAD)
+          echo "GIT_SHA=${GIT_SHA}" >> "$GITHUB_OUTPUT"
+          if [ -n "${{ github.event.inputs.version_tag }}" ]; then
+            SEMVER="${{ github.event.inputs.version_tag }}"
+          elif git describe --tags --exact-match HEAD 2>/dev/null; then
+            SEMVER=$(git describe --tags --exact-match HEAD)
+          else
+            SEMVER=$(git describe --tags --abbrev=0 HEAD 2>/dev/null || echo "v0.0.0")
+          fi
+          VERSION_NAME="${SEMVER#v}"
+          BUILD_VERSION="${VERSION_NAME}+${GIT_SHA}"
+          echo "SEMVER=${SEMVER}"               >> "$GITHUB_OUTPUT"
+          echo "VERSION_NAME=${VERSION_NAME}"   >> "$GITHUB_OUTPUT"
+          echo "BUILD_VERSION=${BUILD_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Build version: ${BUILD_VERSION}"
+
+      - name: Set up Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install JS dependencies
+        run: npm install
+
+      - name: Build Next.js static export
+        run: npm run build
+        env:
+          NODE_ENV: production
+
+      - name: Copy static export into Android assets
+        shell: bash
+        run: |
+          mkdir -p android/app/src/main/assets/web
+          if [ -d "out" ]; then
+            cp -r out/. android/app/src/main/assets/web/
+            echo "Copied Next.js static export from out/"
+          elif [ -d ".next/static" ]; then
+            echo "WARNING: Next.js output is not a static export."
+            echo "Add 'output: static' to next.config.ts for full offline Android support."
+            echo "Continuing without web assets — WebView will load from remote URL in production."
+          fi
+
+      - name: Set up JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+
+      - name: Download gradle-wrapper.jar
+        shell: bash
+        run: |
+          mkdir -p android/gradle/wrapper
+          curl -fsSL \
+            "https://github.com/gradle/gradle/raw/v8.6.0/gradle/wrapper/gradle-wrapper.jar" \
+            -o android/gradle/wrapper/gradle-wrapper.jar 2>/dev/null || true
+          if [ ! -s android/gradle/wrapper/gradle-wrapper.jar ]; then
+            curl -fsSL \
+              "https://services.gradle.org/distributions/gradle-8.6-bin.zip" \
+              -o /tmp/gradle.zip
+            unzip -jo /tmp/gradle.zip "*/lib/gradle-wrapper-*.jar" \
+              -d android/gradle/wrapper/ 2>/dev/null || true
+            JAR=$(find android/gradle/wrapper -name "*.jar" | head -1)
+            if [ -n "$JAR" ] && [ "$JAR" != "android/gradle/wrapper/gradle-wrapper.jar" ]; then
+              mv "$JAR" android/gradle/wrapper/gradle-wrapper.jar
+            fi
+          fi
+          ls -lh android/gradle/wrapper/gradle-wrapper.jar
+
+      - name: Grant Gradle wrapper execute permission
+        run: chmod +x android/gradlew
+
+      - name: Cache Gradle wrapper
+        uses: actions/cache@v4
+        with:
+          path: ~/.gradle/wrapper
+          key: gradle-wrapper-${{ hashFiles('android/gradle/wrapper/gradle-wrapper.properties') }}
+
+      - name: Cache Gradle caches
+        uses: actions/cache@v4
+        with:
+          path: ~/.gradle/caches
+          key: gradle-caches-${{ runner.os }}-${{ hashFiles('android/**/*.gradle') }}
+          restore-keys: |
+            gradle-caches-${{ runner.os }}-
+
+      - name: Write signing keystore from secret
+        shell: bash
+        run: |
+          KEYSTORE_PATH="${RUNNER_TEMP}/release.keystore"
+          echo "${{ secrets.RELEASE_KEYSTORE_BASE64 }}" | base64 --decode > "${KEYSTORE_PATH}"
+          echo "KEYSTORE_PATH=${KEYSTORE_PATH}" >> "$GITHUB_ENV"
+
+      - name: Inject build version into gradle.properties
+        shell: bash
+        run: |
+          PROPS_FILE="android/gradle.properties"
+          sed -i '/^JARVIS_VERSION_NAME=/d' "${PROPS_FILE}"
+          sed -i '/^JARVIS_VERSION_CODE=/d' "${PROPS_FILE}"
+          sed -i '/^JARVIS_GIT_SHA=/d' "${PROPS_FILE}"
+          IFS='.' read -ra PARTS <<< "${{ steps.version.outputs.VERSION_NAME }}"
+          MAJOR="${PARTS[0]:-0}"
+          MINOR="${PARTS[1]:-0}"
+          PATCH="${PARTS[2]:-0}"
+          VERSION_CODE=$(( MAJOR * 10000 + MINOR * 100 + PATCH ))
+          echo "JARVIS_VERSION_NAME=${{ steps.version.outputs.VERSION_NAME }}" >> "${PROPS_FILE}"
+          echo "JARVIS_VERSION_CODE=${VERSION_CODE}"                            >> "${PROPS_FILE}"
+          echo "JARVIS_GIT_SHA=${{ steps.version.outputs.GIT_SHA }}"           >> "${PROPS_FILE}"
+
+      - name: Build release APK (assembleRelease)
+        working-directory: android
+        run: |
+          ./gradlew assembleRelease \
+            --no-daemon \
+            --stacktrace \
+            -Pandroid.injected.signing.store.file="${KEYSTORE_PATH}" \
+            -Pandroid.injected.signing.store.password="${{ secrets.KEYSTORE_PASSWORD }}" \
+            -Pandroid.injected.signing.key.alias="${{ secrets.KEY_ALIAS }}" \
+            -Pandroid.injected.signing.key.password="${{ secrets.KEY_PASSWORD }}"
+        env:
+          GRADLE_OPTS: -Dorg.gradle.jvmargs=-Xmx4g -Dorg.gradle.parallel=true
+
+      - name: Rename APK with build version
+        id: apk
+        shell: bash
+        run: |
+          APK_SRC=$(find android/app/build/outputs/apk/release -name "*.apk" | head -1)
+          if [ -z "${APK_SRC}" ]; then
+            echo "ERROR: No APK found"
+            exit 1
+          fi
+          APK_NAME="jarvis-${{ steps.version.outputs.BUILD_VERSION }}.apk"
+          APK_DEST="${RUNNER_TEMP}/${APK_NAME}"
+          cp "${APK_SRC}" "${APK_DEST}"
+          echo "APK_PATH=${APK_DEST}" >> "$GITHUB_OUTPUT"
+          echo "APK_NAME=${APK_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify APK signature
+        shell: bash
+        run: |
+          APKSIGNER=$(find "${ANDROID_SDK_ROOT}/build-tools" -name "apksigner" | sort -V | tail -1)
+          if [ -z "${APKSIGNER}" ]; then
+            echo "WARNING: apksigner not found, skipping"
+            exit 0
+          fi
+          "${APKSIGNER}" verify --verbose "${{ steps.apk.outputs.APK_PATH }}"
+
+      - name: Upload signed APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.apk.outputs.APK_NAME }}
+          path: ${{ steps.apk.outputs.APK_PATH }}
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Generate and upload build metadata
+        shell: bash
+        run: |
+          METADATA_FILE="${RUNNER_TEMP}/build-metadata.json"
+          cat > "${METADATA_FILE}" <<METAEOF
+          {
+            "buildVersion": "${{ steps.version.outputs.BUILD_VERSION }}",
+            "semver": "${{ steps.version.outputs.SEMVER }}",
+            "gitSha": "${{ steps.version.outputs.GIT_SHA }}",
+            "gitRef": "${{ github.ref }}",
+            "runId": "${{ github.run_id }}",
+            "apkName": "${{ steps.apk.outputs.APK_NAME }}",
+            "builtAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          }
+          METAEOF
+
+      - name: Upload build metadata artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-metadata-${{ steps.version.outputs.GIT_SHA }}
+          path: ${{ runner.temp }}/build-metadata.json
+          retention-days: 90
+          if-no-files-found: error
