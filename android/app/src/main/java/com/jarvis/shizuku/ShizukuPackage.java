@@ -1,33 +1,33 @@
-// android/app/src/main/java/com/jarvis/shizuku/ShizukuPackage.java
-/**
- * ShizukuPackage.java
- * Registers ShizukuModule with the React Native module registry.
- * Add to MainApplication.java's getPackages() list.
- */
-
 package com.jarvis.shizuku;
 
-import androidx.annotation.NonNull;
+/**
+ * ShizukuPackage.java
+ *
+ * Plain Android registry class — no React Native dependency.
+ * Provides a single entry point to initialise the Shizuku subsystem.
+ * Called from MainApplication.onCreate via ShizukuModule.registerListeners().
+ */
+public final class ShizukuPackage {
 
-import com.facebook.react.ReactPackage;
-import com.facebook.react.bridge.NativeModule;
-import com.facebook.react.bridge.ReactApplicationContext;
-import com.facebook.react.uimanager.ViewManager;
+    private ShizukuPackage() {}
 
-import java.util.Collections;
-import java.util.List;
-
-public final class ShizukuPackage implements ReactPackage {
-
-    @NonNull
-    @Override
-    public List<NativeModule> createNativeModules(@NonNull ReactApplicationContext reactContext) {
-        return Collections.singletonList(new ShizukuModule(reactContext));
+    /**
+     * Initialise the Shizuku subsystem.
+     * Registers binder lifecycle listeners so the app knows when
+     * the Shizuku daemon connects or dies.
+     *
+     * Must be called once from Application.onCreate before any
+     * ShizukuBridge method is invoked.
+     */
+    public static void init() {
+        ShizukuBridge.registerListeners();
     }
 
-    @NonNull
-    @Override
-    public List<ViewManager<?, ?>> createViewManagers(@NonNull ReactApplicationContext reactContext) {
-        return Collections.emptyList();
+    /**
+     * Tear down the Shizuku subsystem.
+     * Must be called from Application.onTerminate.
+     */
+    public static void destroy() {
+        ShizukuBridge.unregisterListeners();
     }
 }
