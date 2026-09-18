@@ -34,15 +34,18 @@ jobs:
         run: |
           GIT_SHA=$(git rev-parse --short=8 HEAD)
           echo "GIT_SHA=${GIT_SHA}" >> "$GITHUB_OUTPUT"
+
           if [ -n "${{ github.event.inputs.version_tag }}" ]; then
             SEMVER="${{ github.event.inputs.version_tag }}"
           elif git describe --tags --exact-match HEAD 2>/dev/null; then
             SEMVER=$(git describe --tags --exact-match HEAD)
           else
-            SEMVER=$(git describe --tags --abbrev=0 HEAD 2>/dev/null || echo "v0.0.0")
+            SEMVER=$(git describe --tags --abbrev=0 HEAD 2>/dev/null || echo "v0.1.0")
           fi
+
           VERSION_NAME="${SEMVER#v}"
           BUILD_VERSION="${VERSION_NAME}+${GIT_SHA}"
+
           echo "SEMVER=${SEMVER}"               >> "$GITHUB_OUTPUT"
           echo "VERSION_NAME=${VERSION_NAME}"   >> "$GITHUB_OUTPUT"
           echo "BUILD_VERSION=${BUILD_VERSION}" >> "$GITHUB_OUTPUT"
@@ -68,10 +71,8 @@ jobs:
           if [ -d "out" ]; then
             cp -r out/. android/app/src/main/assets/web/
             echo "Copied Next.js static export from out/"
-          elif [ -d ".next/static" ]; then
-            echo "WARNING: Next.js output is not a static export."
-            echo "Add 'output: static' to next.config.ts for full offline Android support."
-            echo "Continuing without web assets — WebView will load from remote URL in production."
+          else
+            echo "No static export found — WebView will use remote URL in production."
           fi
 
       - name: Set up JDK ${{ env.JAVA_VERSION }}
@@ -131,14 +132,23 @@ jobs:
           sed -i '/^JARVIS_VERSION_NAME=/d' "${PROPS_FILE}"
           sed -i '/^JARVIS_VERSION_CODE=/d' "${PROPS_FILE}"
           sed -i '/^JARVIS_GIT_SHA=/d' "${PROPS_FILE}"
+
           IFS='.' read -ra PARTS <<< "${{ steps.version.outputs.VERSION_NAME }}"
           MAJOR="${PARTS[0]:-0}"
           MINOR="${PARTS[1]:-0}"
           PATCH="${PARTS[2]:-0}"
           VERSION_CODE=$(( MAJOR * 10000 + MINOR * 100 + PATCH ))
+
+          # Guarantee versionCode is always at least 1
+          if [ "${VERSION_CODE}" -lt 1 ]; then
+            VERSION_CODE=1
+          fi
+
           echo "JARVIS_VERSION_NAME=${{ steps.version.outputs.VERSION_NAME }}" >> "${PROPS_FILE}"
           echo "JARVIS_VERSION_CODE=${VERSION_CODE}"                            >> "${PROPS_FILE}"
           echo "JARVIS_GIT_SHA=${{ steps.version.outputs.GIT_SHA }}"           >> "${PROPS_FILE}"
+
+          echo "versionCode=${VERSION_CODE} versionName=${{ steps.version.outputs.VERSION_NAME }}"
 
       - name: Build release APK (assembleRelease)
         working-directory: android
