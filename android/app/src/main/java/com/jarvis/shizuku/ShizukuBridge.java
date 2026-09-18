@@ -2,7 +2,6 @@ package com.jarvis.shizuku;
 
 import android.os.Handler;
 import android.os.HandlerThread;
-import android.os.RemoteException;
 import android.util.Log;
 
 import androidx.annotation.NonNull;
@@ -215,9 +214,6 @@ public final class ShizukuBridge {
                     System.currentTimeMillis() - startMs
             ));
 
-        } catch (RemoteException e) {
-            serviceConnected = false;
-            callback.onError(new ShizukuBinderException("Binder error: " + e.getMessage()));
         } catch (IOException e) {
             callback.onError(new ShizukuBinderException("I/O error: " + e.getMessage()));
         } catch (InterruptedException e) {
