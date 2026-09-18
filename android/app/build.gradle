@@ -1,0 +1,89 @@
+apply plugin: "com.android.application"
+apply plugin: "org.jetbrains.kotlin.android"
+apply plugin: "com.facebook.react"
+
+/**
+ * Version values are injected by CI into gradle.properties:
+ *   JARVIS_VERSION_NAME, JARVIS_VERSION_CODE, JARVIS_GIT_SHA
+ * Defaults are used for local development builds.
+ */
+def jarvisVersionName  = project.hasProperty('JARVIS_VERSION_NAME')  ? JARVIS_VERSION_NAME  : '0.0.1'
+def jarvisVersionCode  = project.hasProperty('JARVIS_VERSION_CODE')  ? JARVIS_VERSION_CODE.toInteger()  : 1
+def jarvisGitSha       = project.hasProperty('JARVIS_GIT_SHA')       ? JARVIS_GIT_SHA       : 'local'
+
+react {
+    /* Autolinking is handled by the React Native Gradle Plugin */
+}
+
+android {
+    ndkVersion rootProject.ext.ndkVersion
+    buildToolsVersion rootProject.ext.buildToolsVersion
+    compileSdk rootProject.ext.compileSdkVersion
+    namespace "com.jarvis"
+
+    defaultConfig {
+        applicationId "com.jarvis"
+        minSdk rootProject.ext.minSdkVersion
+        targetSdk rootProject.ext.targetSdkVersion
+        versionCode jarvisVersionCode
+        versionName jarvisVersionName
+        buildConfigField "String", "GIT_SHA", "\"${jarvisGitSha}\""
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    signingConfigs {
+        release {
+            if (project.hasProperty('android.injected.signing.store.file')) {
+                storeFile     file(project.property('android.injected.signing.store.file'))
+                storePassword project.property('android.injected.signing.store.password')
+                keyAlias      project.property('android.injected.signing.key.alias')
+                keyPassword   project.property('android.injected.signing.key.password')
+            }
+        }
+    }
+
+    buildTypes {
+        debug {
+            debuggable true
+            applicationIdSuffix ".debug"
+        }
+        release {
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+            signingConfig signingConfigs.release
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+}
+
+dependencies {
+    // React Native
+    implementation("com.facebook.react:react-android")
+    implementation("com.facebook.react:hermes-android")
+
+    // Shizuku API
+    implementation 'dev.rikka.shizuku:api:13.1.5'
+    implementation 'dev.rikka.shizuku:provider:13.1.5'
+
+    // AndroidX
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+    implementation 'androidx.core:core-ktx:1.13.1'
+
+    // Test
+    testImplementation 'junit:junit:4.13.2'
+    androidTestImplementation 'androidx.test.ext:junit:1.2.1'
+    androidTestImplementation 'androidx.test.espresso:espresso-core:3.6.1'
+}

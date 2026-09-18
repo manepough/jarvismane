@@ -1,0 +1,169 @@
+/**
+ * src/app/globals.css
+ * Global styles and theme tokens for Jarvis.
+ *
+ * Four themes: matrix, hacker, glyph, minimal.
+ * All color values expressed as CSS custom properties on :root.
+ * No purple gradients. No cursor animations. No pill-shaped generic buttons.
+ * Scrollbar styling kept minimal and on-theme.
+ */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Base reset ───────────────────────────────────────────────────────────── */
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html {
+  font-size: 14px;
+  line-height: 1.6;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Theme: matrix (default) ──────────────────────────────────────────────── */
+
+html.theme-matrix,
+.theme-matrix {
+  --bg:         #0a0e0a;
+  --dim:        #111611;
+  --primary:    #00ff41;
+  --secondary:  #4a7c59;
+  --text:       #d4f5d4;
+  --surface:    #0f1a0f;
+  --border:     #1a2e1a;
+  --red:        #ff4444;
+  --yellow:     #ffcc00;
+}
+
+/* ── Theme: hacker ────────────────────────────────────────────────────────── */
+
+html.theme-hacker,
+.theme-hacker {
+  --bg:         #0d0d0d;
+  --dim:        #141414;
+  --primary:    #e94560;
+  --secondary:  #6e4550;
+  --text:       #f5d0d8;
+  --surface:    #1a0d10;
+  --border:     #2a1018;
+  --red:        #ff4444;
+  --yellow:     #ffcc00;
+}
+
+/* ── Theme: glyph ─────────────────────────────────────────────────────────── */
+
+html.theme-glyph,
+.theme-glyph {
+  --bg:         #070b14;
+  --dim:        #0c1220;
+  --primary:    #4d9de0;
+  --secondary:  #3a5470;
+  --text:       #c8dff5;
+  --surface:    #0e1929;
+  --border:     #1a2f48;
+  --red:        #ff4444;
+  --yellow:     #ffcc00;
+}
+
+/* ── Theme: minimal ───────────────────────────────────────────────────────── */
+
+html.theme-minimal,
+.theme-minimal {
+  --bg:         #f8f8f8;
+  --dim:        #eeeeee;
+  --primary:    #1a1a1a;
+  --secondary:  #666666;
+  --text:       #1a1a1a;
+  --surface:    #ffffff;
+  --border:     #dddddd;
+  --red:        #cc2200;
+  --yellow:     #aa8800;
+}
+
+/* ── Themed scrollbar ─────────────────────────────────────────────────────── */
+
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background-color: var(--primary, #00ff41);
+  opacity: 0.3;
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover {
+  opacity: 0.6;
+}
+
+/* ── Selection ────────────────────────────────────────────────────────────── */
+
+::selection {
+  background-color: color-mix(in srgb, var(--primary) 30%, transparent);
+  color: var(--text);
+}
+
+/* ── Focus visible (keyboard nav only) ───────────────────────────────────── */
+
+:focus-visible {
+  outline: 1.5px solid var(--primary);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* ── Utility: theme background ───────────────────────────────────────────── */
+
+.theme-bg {
+  background-color: var(--bg);
+  color: var(--text);
+}
+
+/* ── Streaming cursor blink ──────────────────────────────────────────────── */
+
+@keyframes cursor-blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+
+.streaming-cursor {
+  display: inline-block;
+  width: 0.5em;
+  height: 1em;
+  background-color: var(--primary);
+  margin-left: 0.1em;
+  vertical-align: text-bottom;
+  animation: cursor-blink 0.8s step-end infinite;
+}
+
+/* ── Recording pulse ──────────────────────────────────────────────────────── */
+
+@keyframes record-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--red) 60%, transparent); }
+  50%       { box-shadow: 0 0 0 6px transparent; }
+}
+
+.recording-pulse {
+  animation: record-pulse 1s ease-in-out infinite;
+}
+
+/* ── Prose reset inside chat bubbles ─────────────────────────────────────── */
+
+.chat-prose > * + * {
+  margin-top: 0.5rem;
+}
+.chat-prose p { margin: 0; }
+.chat-prose p + p { margin-top: 0.5rem; }
