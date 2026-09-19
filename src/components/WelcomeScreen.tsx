@@ -1,14 +1,13 @@
 'use client'
 
-import { useState, useCallback, useEffect, type ReactElement } from 'react'
+import { useState, useCallback, useEffect, useRef, type ReactElement } from 'react'
 import { useStore } from '@/store'
-import { validateApiKey, fetchAvailableModels } from '@/lib/openrouter'
 
 interface WelcomeScreenProps {
   onOpenSettings: () => void
 }
 
-export function WelcomeScreen({ onOpenSettings }: WelcomeScreenProps): ReactElement {
+export function WelcomeScreen({ onOpenSettings: _onOpenSettings }: WelcomeScreenProps): ReactElement {
   const { settings, updateSettings, createConversation } = useStore()
   const [inputKey, setInputKey] = useState('')
   const [validating, setValidating] = useState(false)
@@ -16,95 +15,140 @@ export function WelcomeScreen({ onOpenSettings }: WelcomeScreenProps): ReactElem
   const [phase, setPhase] = useState<'signin' | 'ready'>(
     settings.openRouterApiKey.trim().length > 0 ? 'ready' : 'signin'
   )
+  const inputRef = useRef<HTMLInputElement>(null)
 
-  // If key already stored, go straight to ready
   useEffect(() => {
     if (settings.openRouterApiKey.trim().length > 0) setPhase('ready')
   }, [settings.openRouterApiKey])
 
-  const handleConnect = useCallback(async () => {
+  const handleConnect = useCallback(() => {
     const key = inputKey.trim()
     if (!key) { setError('Paste your OpenRouter API key first.'); return }
+
     setValidating(true)
     setError(null)
-    const valid = await validateApiKey(key)
-    if (!valid) {
+
+    // Use XMLHttpRequest for max WebView compatibility — no AbortSignal needed
+    const xhr = new XMLHttpRequest()
+    xhr.open('GET', 'https://openrouter.ai/api/v1/models', true)
+    xhr.setRequestHeader('Authorization', `Bearer ${key}`)
+    xhr.timeout = 10000
+
+    xhr.onload = () => {
       setValidating(false)
-      setError('Invalid key. Get one at openrouter.ai/keys')
-      return
+      if (xhr.status === 200) {
+        updateSettings({ openRouterApiKey: key })
+        setPhase('ready')
+      } else if (xhr.status === 401 || xhr.status === 403) {
+        setError('Invalid key. Get one at openrouter.ai/keys')
+      } else {
+        // Accept the key anyway — might be a temporary server issue
+        updateSettings({ openRouterApiKey: key })
+        setPhase('ready')
+      }
     }
-    // Fetch and store best available models
-    await fetchAvailableModels(key)
-    updateSettings({ openRouterApiKey: key })
-    setValidating(false)
-    setPhase('ready')
+
+    xhr.onerror = () => {
+      setValidating(false)
+      // Network error — save the key anyway and let the chat handle errors
+      if (key.startsWith('sk-or-')) {
+        updateSettings({ openRouterApiKey: key })
+        setPhase('ready')
+      } else {
+        setError('Could not verify key. Check your internet connection.')
+      }
+    }
+
+    xhr.ontimeout = () => {
+      setValidating(false)
+      // Timeout — save the key anyway if it looks valid
+      if (key.startsWith('sk-or-') || key.length > 20) {
+        updateSettings({ openRouterApiKey: key })
+        setPhase('ready')
+      } else {
+        setError('Request timed out. Try again.')
+      }
+    }
+
+    xhr.send()
   }, [inputKey, updateSettings])
 
   const handleStart = useCallback(() => createConversation(), [createConversation])
+
+  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') handleConnect()
+  }, [handleConnect])
 
   if (phase === 'signin') {
     return (
       <div style={{
         flex: 1, display: 'flex', flexDirection: 'column',
         alignItems: 'center', justifyContent: 'center',
-        padding: '32px 24px', minHeight: '100vh', background: 'var(--bg)',
+        padding: '32px 20px', minHeight: '100vh', background: 'var(--bg)',
       }}>
-        <div style={{ width: '100%', maxWidth: '380px', display: 'flex', flexDirection: 'column', gap: '28px' }}>
+        <div style={{ width: '100%', maxWidth: '360px', display: 'flex', flexDirection: 'column', gap: '24px' }}>
 
-          {/* Logo */}
           <div style={{ textAlign: 'center' }}>
-            <div style={{ fontFamily: 'monospace', fontSize: '36px', fontWeight: 700, letterSpacing: '8px', color: 'var(--primary)' }}>
+            <div style={{ fontFamily: 'monospace', fontSize: '34px', fontWeight: 700, letterSpacing: '8px', color: 'var(--primary)', marginBottom: '6px' }}>
               JARVIS
             </div>
-            <div style={{ fontFamily: 'monospace', fontSize: '10px', color: 'rgba(74,124,89,0.6)', letterSpacing: '3px', marginTop: '6px' }}>
-              CONNECT TO OPENROUTER
+            <div style={{ fontFamily: 'monospace', fontSize: '10px', color: 'rgba(74,124,89,0.55)', letterSpacing: '3px' }}>
+              CONNECT YOUR OPENROUTER ACCOUNT
             </div>
           </div>
 
-          <div style={{ height: '1px', background: 'rgba(0,255,65,0.12)' }} />
+          <div style={{ height: '1px', background: 'rgba(0,255,65,0.1)' }} />
 
-          {/* Sign in form */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
             <div>
-              <label style={{ fontFamily: 'monospace', fontSize: '11px', color: 'rgba(212,245,212,0.6)', display: 'block', marginBottom: '8px', letterSpacing: '1px' }}>
-                OPENROUTER API KEY
-              </label>
+              <div style={{ fontFamily: 'monospace', fontSize: '10px', color: 'rgba(212,245,212,0.5)', letterSpacing: '1px', marginBottom: '8px' }}>
+                API KEY
+              </div>
               <input
+                ref={inputRef}
                 type="password"
                 value={inputKey}
                 onChange={e => { setInputKey(e.target.value); setError(null) }}
-                onKeyDown={e => e.key === 'Enter' && handleConnect()}
+                onKeyDown={handleKeyDown}
                 placeholder="sk-or-v1-..."
+                autoComplete="off"
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
                 style={{
                   width: '100%', padding: '12px 14px',
-                  background: 'var(--dim)', border: '1px solid rgba(0,255,65,0.2)',
-                  borderRadius: '8px', color: 'var(--text)', fontFamily: 'monospace',
-                  fontSize: '13px', outline: 'none',
+                  background: 'var(--dim)',
+                  border: `1px solid ${error ? 'rgba(255,68,68,0.4)' : 'rgba(0,255,65,0.2)'}`,
+                  borderRadius: '8px', color: 'var(--text)',
+                  fontFamily: 'monospace', fontSize: '13px', outline: 'none',
+                  boxSizing: 'border-box',
                 }}
-                onFocus={e => { e.target.style.borderColor = 'rgba(0,255,65,0.6)' }}
-                onBlur={e => { e.target.style.borderColor = 'rgba(0,255,65,0.2)' }}
-                spellCheck={false}
-                autoComplete="off"
               />
             </div>
 
             {error && (
-              <div style={{ fontFamily: 'monospace', fontSize: '11px', color: '#ff6666', padding: '8px 12px', background: 'rgba(255,68,68,0.08)', border: '1px solid rgba(255,68,68,0.2)', borderRadius: '6px' }}>
+              <div style={{
+                fontFamily: 'monospace', fontSize: '11px', color: '#ff8888',
+                padding: '8px 12px', background: 'rgba(255,68,68,0.06)',
+                border: '1px solid rgba(255,68,68,0.2)', borderRadius: '6px',
+              }}>
                 {error}
               </div>
             )}
 
             <button
               onClick={handleConnect}
-              disabled={validating || inputKey.trim() === ''}
+              disabled={validating}
               style={{
-                padding: '12px', borderRadius: '8px',
-                border: '1px solid rgba(0,255,65,0.5)',
-                background: validating ? 'rgba(0,255,65,0.08)' : 'transparent',
-                color: 'var(--primary)', fontFamily: 'monospace', fontSize: '13px',
-                fontWeight: 600, cursor: validating ? 'wait' : 'pointer',
+                width: '100%', padding: '13px',
+                borderRadius: '8px',
+                border: '1px solid rgba(0,255,65,0.45)',
+                background: validating ? 'rgba(0,255,65,0.06)' : 'rgba(0,255,65,0.04)',
+                color: 'var(--primary)',
+                fontFamily: 'monospace', fontSize: '13px', fontWeight: 600,
+                cursor: validating ? 'wait' : 'pointer',
                 letterSpacing: '1px', transition: 'all 0.15s',
-                opacity: inputKey.trim() === '' ? 0.5 : 1,
+                boxSizing: 'border-box',
               }}
             >
               {validating ? 'Connecting...' : 'Connect'}
@@ -115,29 +159,27 @@ export function WelcomeScreen({ onOpenSettings }: WelcomeScreenProps): ReactElem
                 href="https://openrouter.ai/keys"
                 target="_blank"
                 rel="noopener noreferrer"
-                style={{ fontFamily: 'monospace', fontSize: '11px', color: 'rgba(74,124,89,0.6)', textDecoration: 'underline' }}
+                style={{ fontFamily: 'monospace', fontSize: '11px', color: 'rgba(74,124,89,0.5)', textDecoration: 'underline' }}
               >
                 Get a free key at openrouter.ai/keys
               </a>
             </div>
           </div>
 
-          {/* What Jarvis can do */}
-          <div style={{ border: '1px solid rgba(0,255,65,0.1)', borderRadius: '8px', padding: '16px' }}>
-            <div style={{ fontFamily: 'monospace', fontSize: '10px', color: 'rgba(74,124,89,0.4)', letterSpacing: '2px', textTransform: 'uppercase', marginBottom: '10px' }}>
-              What you get
+          <div style={{ border: '1px solid rgba(0,255,65,0.08)', borderRadius: '8px', padding: '14px' }}>
+            <div style={{ fontFamily: 'monospace', fontSize: '9px', color: 'rgba(74,124,89,0.35)', letterSpacing: '2px', textTransform: 'uppercase' as const, marginBottom: '10px' }}>
+              Capabilities
             </div>
             {[
-              'Auto-selects best available model',
-              'Falls back through models on rate limit',
-              'Race mode — fastest best answer wins',
-              'Voice input + file/image attachments',
-              'No restrictions on any topic',
-              'Works offline with local command parser',
+              'Auto-selects best model — falls back on rate limit',
+              'Race mode — all models compete, best answer wins',
+              'Voice input + image and file attachments',
+              'No topic restrictions',
+              'Offline local command parser',
             ].map(item => (
-              <div key={item} style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px', fontFamily: 'monospace', fontSize: '11px', color: 'var(--secondary)' }}>
-                <span style={{ color: 'var(--primary)', fontSize: '8px' }}>◆</span>
-                {item}
+              <div key={item} style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', marginBottom: '7px' }}>
+                <span style={{ color: 'var(--primary)', fontSize: '7px', marginTop: '3px', flexShrink: 0 }}>◆</span>
+                <span style={{ fontFamily: 'monospace', fontSize: '11px', color: 'var(--secondary)', lineHeight: '1.4' }}>{item}</span>
               </div>
             ))}
           </div>
@@ -147,48 +189,47 @@ export function WelcomeScreen({ onOpenSettings }: WelcomeScreenProps): ReactElem
     )
   }
 
-  // Ready screen
   return (
     <div style={{
       flex: 1, display: 'flex', flexDirection: 'column',
       alignItems: 'center', justifyContent: 'center',
-      padding: '32px 24px', minHeight: '100vh', background: 'var(--bg)',
+      padding: '32px 20px', minHeight: '100vh', background: 'var(--bg)',
     }}>
-      <div style={{ width: '100%', maxWidth: '380px', display: 'flex', flexDirection: 'column', gap: '24px', textAlign: 'center' }}>
+      <div style={{ width: '100%', maxWidth: '360px', display: 'flex', flexDirection: 'column', gap: '20px', textAlign: 'center' }}>
         <div>
-          <div style={{ fontFamily: 'monospace', fontSize: '36px', fontWeight: 700, letterSpacing: '8px', color: 'var(--primary)' }}>
+          <div style={{ fontFamily: 'monospace', fontSize: '34px', fontWeight: 700, letterSpacing: '8px', color: 'var(--primary)', marginBottom: '6px' }}>
             JARVIS
           </div>
-          <div style={{ fontFamily: 'monospace', fontSize: '10px', color: 'rgba(74,124,89,0.6)', letterSpacing: '2px', marginTop: '6px' }}>
+          <div style={{ fontFamily: 'monospace', fontSize: '10px', color: 'rgba(74,124,89,0.55)', letterSpacing: '2px' }}>
             READY
           </div>
         </div>
 
-        <div style={{ height: '1px', background: 'rgba(0,255,65,0.12)' }} />
+        <div style={{ height: '1px', background: 'rgba(0,255,65,0.1)' }} />
 
         <button
           onClick={handleStart}
           style={{
-            padding: '14px', borderRadius: '8px',
-            border: '1px solid rgba(0,255,65,0.5)',
-            background: 'rgba(0,255,65,0.05)',
+            width: '100%', padding: '14px',
+            borderRadius: '8px',
+            border: '1px solid rgba(0,255,65,0.45)',
+            background: 'rgba(0,255,65,0.04)',
             color: 'var(--primary)', fontFamily: 'monospace',
-            fontSize: '14px', fontWeight: 600, cursor: 'pointer',
+            fontSize: '13px', fontWeight: 600, cursor: 'pointer',
             letterSpacing: '2px', transition: 'all 0.15s',
+            boxSizing: 'border-box',
           }}
-          onMouseEnter={e => { (e.target as HTMLButtonElement).style.background = 'rgba(0,255,65,0.1)'; (e.target as HTMLButtonElement).style.borderColor = 'var(--primary)' }}
-          onMouseLeave={e => { (e.target as HTMLButtonElement).style.background = 'rgba(0,255,65,0.05)'; (e.target as HTMLButtonElement).style.borderColor = 'rgba(0,255,65,0.5)' }}
         >
           NEW CONVERSATION
         </button>
 
-        <div style={{ fontFamily: 'monospace', fontSize: '11px', color: 'rgba(74,124,89,0.4)' }}>
-          or select a conversation from the sidebar
+        <div style={{ fontFamily: 'monospace', fontSize: '11px', color: 'rgba(74,124,89,0.35)' }}>
+          or select one from the sidebar  ☰
         </div>
 
         <button
-          onClick={() => { updateSettings({ openRouterApiKey: '' }); setPhase('signin'); setInputKey('') }}
-          style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'monospace', fontSize: '10px', color: 'rgba(74,124,89,0.3)', textDecoration: 'underline' }}
+          onClick={() => { updateSettings({ openRouterApiKey: '' }); setPhase('signin'); setInputKey(''); setError(null) }}
+          style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'monospace', fontSize: '10px', color: 'rgba(74,124,89,0.25)', textDecoration: 'underline', padding: '4px' }}
         >
           Switch API key
         </button>
