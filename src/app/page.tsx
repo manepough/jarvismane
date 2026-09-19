@@ -49,14 +49,18 @@ export default function Home(): ReactElement {
   }, [settings.theme])
 
   if (!isHydrated) {
-    return (
-      <div className={`theme-${settings.theme} theme-bg min-h-screen flex items-center justify-center`}>
-        <div className="font-mono text-sm text-[var(--secondary)]">
-          Loading...
-        </div>
+  useEffect(() => {
+    const timer = setTimeout(() => useStore.getState().setHydrated(), 500)
+    return () => clearTimeout(timer)
+  }, [])
+  return (
+    <div style={{ background: '#0a0e0a', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div style={{ color: '#00ff41', fontFamily: 'monospace', fontSize: '14px' }}>
+        Loading...
       </div>
-    )
-  }
+    </div>
+  )
+}
 
   const hasApiKey = settings.openRouterApiKey.trim().length > 0
 
