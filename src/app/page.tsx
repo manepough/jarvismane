@@ -2,7 +2,6 @@
 /**
  * src/app/page.tsx
  * Root application shell.
- * Handles hydration guard, theme class injection, and top-level layout.
  */
 
 import { useEffect, useState, type ReactElement } from 'react'
@@ -16,7 +15,6 @@ import { WelcomeScreen } from '@/components/WelcomeScreen'
 
 export default function Home(): ReactElement {
   const {
-    isHydrated,
     settings,
     currentConversationId,
     showSettings,
@@ -25,10 +23,8 @@ export default function Home(): ReactElement {
 
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(true)
 
-  // Monitor network state and drain offline queue on reconnect
   useNetworkStatus()
 
-  // Wire git credential accessor to store on mount
   useEffect(() => {
     const { settings: s } = useStore.getState()
     setCredentialAccessor(() => ({
@@ -41,26 +37,11 @@ export default function Home(): ReactElement {
     }))
   }, [])
 
-  // Sync theme class to <html>
   useEffect(() => {
     const root = document.documentElement
     root.classList.remove('theme-matrix', 'theme-hacker', 'theme-glyph', 'theme-minimal')
     root.classList.add(`theme-${settings.theme}`)
   }, [settings.theme])
-
-  if (!isHydrated) {
-  useEffect(() => {
-    const timer = setTimeout(() => useStore.getState().setHydrated(), 500)
-    return () => clearTimeout(timer)
-  }, [])
-  return (
-    <div style={{ background: '#0a0e0a', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <div style={{ color: '#00ff41', fontFamily: 'monospace', fontSize: '14px' }}>
-        Loading...
-      </div>
-    </div>
-  )
-}
 
   const hasApiKey = settings.openRouterApiKey.trim().length > 0
 
