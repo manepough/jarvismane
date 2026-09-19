@@ -55,38 +55,42 @@ export interface SendOptions {
   maxTokens?: number
 }
 
-// ── Validate API key ────────────────────────────────────────────────────────
+// ── Validate API key (WebView-compatible XHR) ──────────────────────────────
 
-export async function validateApiKey(apiKey: string): Promise<boolean> {
-  try {
-    const res = await fetch(OR_MODELS_URL, {
-      headers: { Authorization: `Bearer ${apiKey}` },
-      signal: AbortSignal.timeout(8000),
-    })
-    return res.ok
-  } catch {
-    return false
-  }
+export function validateApiKey(apiKey: string): Promise<boolean> {
+  return new Promise(resolve => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('GET', OR_MODELS_URL, true)
+    xhr.setRequestHeader('Authorization', `Bearer ${apiKey}`)
+    xhr.timeout = 10000
+    xhr.onload = () => resolve(xhr.status === 200)
+    xhr.onerror = () => resolve(false)
+    xhr.ontimeout = () => resolve(false)
+    xhr.send()
+  })
 }
 
-// ── Fetch available models ──────────────────────────────────────────────────
+// ── Fetch available models (WebView-compatible XHR) ─────────────────────────
 
-export async function fetchAvailableModels(apiKey: string): Promise<string[]> {
-  try {
-    const res = await fetch(OR_MODELS_URL, {
-      headers: { Authorization: `Bearer ${apiKey}` },
-      signal: AbortSignal.timeout(10000),
-    })
-    if (!res.ok) return MODEL_PRIORITY
-    const data = await res.json() as { data: { id: string }[] }
-    const ids = data.data.map(m => m.id)
-    // Return priority list filtered to what's available, plus anything extra
-    const prioritized = MODEL_PRIORITY.filter(m => ids.includes(m))
-    const rest = ids.filter(id => !MODEL_PRIORITY.includes(id)).slice(0, 20)
-    return [...prioritized, ...rest]
-  } catch {
-    return MODEL_PRIORITY
-  }
+export function fetchAvailableModels(apiKey: string): Promise<string[]> {
+  return new Promise(resolve => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('GET', OR_MODELS_URL, true)
+    xhr.setRequestHeader('Authorization', `Bearer ${apiKey}`)
+    xhr.timeout = 10000
+    xhr.onload = () => {
+      try {
+        const data = JSON.parse(xhr.responseText) as { data: { id: string }[] }
+        const ids = data.data.map(m => m.id)
+        const prioritized = MODEL_PRIORITY.filter(m => ids.includes(m))
+        const rest = ids.filter(id => !MODEL_PRIORITY.includes(id)).slice(0, 20)
+        resolve([...prioritized, ...rest])
+      } catch { resolve(MODEL_PRIORITY) }
+    }
+    xhr.onerror = () => resolve(MODEL_PRIORITY)
+    xhr.ontimeout = () => resolve(MODEL_PRIORITY)
+    xhr.send()
+  })
 }
 
 // ── Stream a single model ───────────────────────────────────────────────────
@@ -127,7 +131,7 @@ export async function streamMessage(
         temperature: temperature ?? 0.7,
         max_tokens: maxTokens ?? 4096,
       }),
-      signal: signal ?? AbortSignal.timeout(90_000),
+      signal: signal,
     })
   } catch (err: unknown) {
     if (err instanceof DOMException && err.name === 'AbortError') return
@@ -220,7 +224,7 @@ export async function raceModels(
           temperature: temperature ?? 0.7,
           max_tokens: maxTokens ?? 2048,
         }),
-        signal: AbortSignal.timeout(30_000),
+        signal: AbortSignal.timeout ? AbortSignal.timeout(30_000) : undefined,
       })
         .then(res => res.ok ? res.json() : null)
         .then((data: { choices?: { message?: { content?: string } }[] } | null) => {
