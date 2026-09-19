@@ -1,10 +1,7 @@
 /**
  * src/lib/openrouter.ts
- * OpenRouter API integration with streaming, vision/file attachment support,
- * and offline fallback via the local command parser.
- *
- * All network calls include explicit timeouts and typed error handling.
- * No credential is stored in this module.
+ * OpenRouter API — streaming, model rotation, best-answer race mode.
+ * Modeled on G0DM0D3's openrouter.ts patterns.
  */
 
 import type { Message, Attachment } from '@/types'
@@ -12,26 +9,39 @@ import { APIKeyMissingError, APIRequestError } from '@/types'
 import { parseOfflineCommand } from '@/services/OfflineCommandParser'
 import { isVisionCompatibleType } from '@/services/AttachmentService'
 
-// ─── Constants ────────────────────────────────────────────────────────────────
+const OR_URL = 'https://openrouter.ai/api/v1/chat/completions'
+const OR_MODELS_URL = 'https://openrouter.ai/api/v1/models'
 
-const OPENROUTER_API_URL: string = 'https://openrouter.ai/api/v1/chat/completions'
-const REQUEST_TIMEOUT_MS: number = 90_000
+// ── Model priority list — best to fallback ──────────────────────────────────
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+export const MODEL_PRIORITY: string[] = [
+  'anthropic/claude-opus-4-5',
+  'anthropic/claude-sonnet-4-5',
+  'google/gemini-2.5-pro',
+  'openai/gpt-4o',
+  'anthropic/claude-3.5-haiku',
+  'google/gemini-flash-1.5',
+  'openai/gpt-4o-mini',
+  'mistralai/mistral-large',
+  'meta-llama/llama-3.3-70b-instruct',
+  'qwen/qwen-2.5-72b-instruct',
+]
 
-type OpenRouterContentPart =
+// ── Types ──────────────────────────────────────────────────────────────────
+
+type ContentPart =
   | { type: 'text'; text: string }
   | { type: 'image_url'; image_url: { url: string } }
 
-interface OpenRouterMessage {
+interface ORMessage {
   role: 'system' | 'user' | 'assistant'
-  content: string | OpenRouterContentPart[]
+  content: string | ContentPart[]
 }
 
 export interface StreamCallbacks {
   onToken: (token: string) => void
   onDone: (fullContent: string) => void
-  onError: (error: APIKeyMissingError | APIRequestError | Error) => void
+  onError: (error: Error) => void
 }
 
 export interface SendOptions {
@@ -45,24 +55,52 @@ export interface SendOptions {
   maxTokens?: number
 }
 
-// ─── Public API ───────────────────────────────────────────────────────────────
+// ── Validate API key ────────────────────────────────────────────────────────
 
-/**
- * Stream a response from OpenRouter, calling onToken for each SSE chunk.
- * Falls back to the offline parser if apiKey is empty or network fails.
- */
+export async function validateApiKey(apiKey: string): Promise<boolean> {
+  try {
+    const res = await fetch(OR_MODELS_URL, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: AbortSignal.timeout(8000),
+    })
+    return res.ok
+  } catch {
+    return false
+  }
+}
+
+// ── Fetch available models ──────────────────────────────────────────────────
+
+export async function fetchAvailableModels(apiKey: string): Promise<string[]> {
+  try {
+    const res = await fetch(OR_MODELS_URL, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: AbortSignal.timeout(10000),
+    })
+    if (!res.ok) return MODEL_PRIORITY
+    const data = await res.json() as { data: { id: string }[] }
+    const ids = data.data.map(m => m.id)
+    // Return priority list filtered to what's available, plus anything extra
+    const prioritized = MODEL_PRIORITY.filter(m => ids.includes(m))
+    const rest = ids.filter(id => !MODEL_PRIORITY.includes(id)).slice(0, 20)
+    return [...prioritized, ...rest]
+  } catch {
+    return MODEL_PRIORITY
+  }
+}
+
+// ── Stream a single model ───────────────────────────────────────────────────
+
 export async function streamMessage(
   options: SendOptions,
   callbacks: StreamCallbacks
 ): Promise<void> {
-  const { messages, systemPrompt, model, apiKey, attachments, signal, temperature, maxTokens } =
-    options
+  const { messages, systemPrompt, model, apiKey, attachments, signal, temperature, maxTokens } = options
 
   if (apiKey.trim() === '') {
-    // Attempt offline fallback
-    const lastUserMessage = [...messages].reverse().find((m) => m.role === 'user')
-    if (lastUserMessage !== undefined) {
-      const result = parseOfflineCommand(lastUserMessage.content)
+    const last = [...messages].reverse().find(m => m.role === 'user')
+    if (last) {
+      const result = parseOfflineCommand(last.content)
       callbacks.onDone(result.response)
     } else {
       callbacks.onError(new APIKeyMissingError())
@@ -70,38 +108,33 @@ export async function streamMessage(
     return
   }
 
-  const openRouterMessages = buildOpenRouterMessages(messages, systemPrompt, attachments ?? [])
+  const orMessages = buildORMessages(messages, systemPrompt, attachments ?? [])
 
-  const requestBody = {
-    model,
-    messages: openRouterMessages,
-    stream: true,
-    temperature: temperature ?? 0.7,
-    max_tokens: maxTokens ?? 4096,
-  }
-
-  let response: Response
+  let res: Response
   try {
-    response = await fetch(OPENROUTER_API_URL, {
+    res = await fetch(OR_URL, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
-        'HTTP-Referer': typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000',
+        'HTTP-Referer': 'https://jarvis.local',
         'X-Title': 'Jarvis',
       },
-      body: JSON.stringify(requestBody),
-      signal: signal ?? AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      body: JSON.stringify({
+        model,
+        messages: orMessages,
+        stream: true,
+        temperature: temperature ?? 0.7,
+        max_tokens: maxTokens ?? 4096,
+      }),
+      signal: signal ?? AbortSignal.timeout(90_000),
     })
   } catch (err: unknown) {
-    if (err instanceof DOMException && err.name === 'AbortError') {
-      // User-initiated abort — not an error
-      return
-    }
-    // Network failure — try offline fallback
-    const lastUserMessage = [...messages].reverse().find((m) => m.role === 'user')
-    if (lastUserMessage !== undefined) {
-      const result = parseOfflineCommand(lastUserMessage.content)
+    if (err instanceof DOMException && err.name === 'AbortError') return
+    // Network fail — try offline
+    const last = [...messages].reverse().find(m => m.role === 'user')
+    if (last) {
+      const result = parseOfflineCommand(last.content)
       callbacks.onDone('[Offline] ' + result.response)
     } else {
       callbacks.onError(new Error(`Network error: ${err instanceof Error ? err.message : String(err)}`))
@@ -109,125 +142,157 @@ export async function streamMessage(
     return
   }
 
-  if (!response.ok) {
-    const body = await response.text().catch(() => '')
-    callbacks.onError(new APIRequestError(response.status, body.slice(0, 300)))
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    callbacks.onError(new APIRequestError(res.status, body.slice(0, 300)))
     return
   }
 
-  const reader = response.body?.getReader()
-  if (reader === undefined || reader === null) {
-    callbacks.onError(new Error('Response body is not readable'))
-    return
-  }
+  const reader = res.body?.getReader()
+  if (!reader) { callbacks.onError(new Error('No response body')); return }
 
-  const decoder = new TextDecoder('utf-8')
-  let fullContent = ''
-  let buffer = ''
+  const dec = new TextDecoder()
+  let full = ''
+  let buf = ''
 
   try {
     while (true) {
       const { done, value } = await reader.read()
       if (done) break
-
-      buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split('\n')
-      buffer = lines.pop() ?? ''
-
+      buf += dec.decode(value, { stream: true })
+      const lines = buf.split('\n')
+      buf = lines.pop() ?? ''
       for (const line of lines) {
-        const trimmed = line.trim()
-        if (!trimmed.startsWith('data: ')) continue
-        const data = trimmed.slice(6)
-        if (data === '[DONE]') break
-
+        const t = line.trim()
+        if (!t.startsWith('data: ')) continue
+        const d = t.slice(6)
+        if (d === '[DONE]') break
         try {
-          const parsed = JSON.parse(data) as {
-            choices?: { delta?: { content?: string } }[]
-          }
-          const token = parsed.choices?.[0]?.delta?.content ?? ''
-          if (token.length > 0) {
-            fullContent += token
-            callbacks.onToken(token)
-          }
-        } catch {
-          // Malformed SSE chunk — skip
-        }
+          const p = JSON.parse(d) as { choices?: { delta?: { content?: string } }[] }
+          const tok = p.choices?.[0]?.delta?.content ?? ''
+          if (tok) { full += tok; callbacks.onToken(tok) }
+        } catch {}
       }
     }
   } catch (err: unknown) {
-    if (err instanceof DOMException && err.name === 'AbortError') {
-      // User stopped generation — complete with what we have
-      callbacks.onDone(fullContent)
-      return
-    }
-    callbacks.onError(new Error(`Stream read error: ${err instanceof Error ? err.message : String(err)}`))
+    if (err instanceof DOMException && err.name === 'AbortError') { callbacks.onDone(full); return }
+    callbacks.onError(new Error(`Stream error: ${err instanceof Error ? err.message : String(err)}`))
     return
   } finally {
-    try {
-      reader.releaseLock()
-    } catch {
-      // Non-fatal
-    }
+    try { reader.releaseLock() } catch {}
   }
 
-  callbacks.onDone(fullContent)
+  callbacks.onDone(full)
 }
 
-// ─── Private Helpers ──────────────────────────────────────────────────────────
+// ── Race mode — try multiple models, return best non-empty response ─────────
 
-function buildOpenRouterMessages(
+export interface RaceResult {
+  content: string
+  model: string
+  durationMs: number
+}
+
+export async function raceModels(
+  options: Omit<SendOptions, 'model'>,
+  models: string[],
+  onLead?: (result: RaceResult) => void
+): Promise<RaceResult> {
+  const { messages, systemPrompt, apiKey, attachments, temperature, maxTokens } = options
+
+  const orMessages = buildORMessages(messages, systemPrompt, attachments ?? [])
+
+  const attempt = (model: string): Promise<RaceResult | null> =>
+    new Promise(resolve => {
+      const start = Date.now()
+      fetch(OR_URL, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': 'https://jarvis.local',
+          'X-Title': 'Jarvis',
+        },
+        body: JSON.stringify({
+          model,
+          messages: orMessages,
+          stream: false,
+          temperature: temperature ?? 0.7,
+          max_tokens: maxTokens ?? 2048,
+        }),
+        signal: AbortSignal.timeout(30_000),
+      })
+        .then(res => res.ok ? res.json() : null)
+        .then((data: { choices?: { message?: { content?: string } }[] } | null) => {
+          const content = data?.choices?.[0]?.message?.content?.trim() ?? ''
+          if (content.length > 0) {
+            resolve({ content, model, durationMs: Date.now() - start })
+          } else {
+            resolve(null)
+          }
+        })
+        .catch(() => resolve(null))
+    })
+
+  // Fire all models in parallel — return first good result, notify on each lead
+  return new Promise((resolve, reject) => {
+    let best: RaceResult | null = null
+    let settled = 0
+
+    models.slice(0, 5).forEach(model => {
+      attempt(model).then(result => {
+        settled++
+        if (result !== null) {
+          if (best === null || result.content.length > best.content.length) {
+            best = result
+            onLead?.(result)
+          }
+        }
+        if (settled === Math.min(models.length, 5)) {
+          if (best !== null) resolve(best)
+          else reject(new Error('All models failed'))
+        }
+      })
+    })
+  })
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+
+function buildORMessages(
   messages: Message[],
   systemPrompt: string,
   attachments: Attachment[]
-): OpenRouterMessage[] {
-  const result: OpenRouterMessage[] = [
-    { role: 'system', content: systemPrompt },
-  ]
+): ORMessage[] {
+  const result: ORMessage[] = [{ role: 'system', content: systemPrompt }]
 
-  for (const message of messages) {
-    if (message.role === 'system') continue
-
-    // If this is the last user message and there are attachments, embed them
+  for (const msg of messages) {
+    if (msg.role === 'system') continue
     const isLastUser =
-      message.role === 'user' &&
-      messages.filter((m) => m.role === 'user').at(-1)?.id === message.id
+      msg.role === 'user' &&
+      messages.filter(m => m.role === 'user').at(-1)?.id === msg.id
 
-    const msgAttachments = isLastUser
-      ? [...(message.attachments ?? []), ...attachments]
-      : (message.attachments ?? [])
+    const msgAtts = isLastUser
+      ? [...(msg.attachments ?? []), ...attachments]
+      : (msg.attachments ?? [])
 
-    const visionAttachments = msgAttachments.filter(
-      (a) => isVisionCompatibleType(a.mediaType) && a.data.length > 0
-    )
+    const visionAtts = msgAtts.filter(a => isVisionCompatibleType(a.mediaType) && a.data.length > 0)
 
-    if (visionAttachments.length > 0) {
-      const parts: OpenRouterContentPart[] = [{ type: 'text', text: message.content }]
-      for (const att of visionAttachments) {
-        parts.push({
-          type: 'image_url',
-          image_url: {
-            url: `data:${att.mediaType};base64,${att.data}`,
-          },
-        })
+    if (visionAtts.length > 0) {
+      const parts: ContentPart[] = [{ type: 'text', text: msg.content }]
+      for (const att of visionAtts) {
+        parts.push({ type: 'image_url', image_url: { url: `data:${att.mediaType};base64,${att.data}` } })
       }
-      result.push({ role: message.role as 'user' | 'assistant', content: parts })
+      result.push({ role: msg.role as 'user' | 'assistant', content: parts })
     } else {
-      // Include text-file content inline for non-vision attachments
-      let content = message.content
-      const textAttachments = msgAttachments.filter(
-        (a) => !isVisionCompatibleType(a.mediaType) && a.data.length > 0
-      )
-      for (const att of textAttachments) {
-        try {
-          const decoded = atob(att.data)
-          content += `\n\n[Attached file: ${att.filename}]\n${decoded.slice(0, 8000)}`
-        } catch {
-          content += `\n\n[Attached file: ${att.filename} — binary content not shown]`
-        }
+      let content = msg.content
+      const textAtts = msgAtts.filter(a => !isVisionCompatibleType(a.mediaType) && a.data.length > 0)
+      for (const att of textAtts) {
+        try { content += `\n\n[File: ${att.filename}]\n${atob(att.data).slice(0, 8000)}` }
+        catch { content += `\n\n[File: ${att.filename} — binary]` }
       }
-      result.push({ role: message.role as 'user' | 'assistant', content })
+      result.push({ role: msg.role as 'user' | 'assistant', content })
     }
   }
-
   return result
 }
