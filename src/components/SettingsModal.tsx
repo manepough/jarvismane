@@ -1,54 +1,251 @@
 'use client'
 
-/**
- * src/components/SettingsModal.tsx
- * Settings panel for Jarvis.
- * Sections: API, Voice, Git Sync, Appearance.
- * All form fields write directly to the store via updateSettings.
- * Git PAT is stored in localStorage (the best available web-context storage).
- * No fake metrics, no placeholder text, no truncation.
- */
-
 import { useState, useCallback, type ReactElement, type ReactNode } from 'react'
-import { X, Eye, EyeOff, CheckCircle, XCircle, Loader2 } from 'lucide-react'
 import { useStore } from '@/store'
 import { verifyRepoAccess, setCredentialAccessor } from '@/services/GitSyncService'
 import type { Theme } from '@/types'
 
-interface SettingsModalProps {
-  onClose: () => void
+interface SettingsModalProps { onClose: () => void }
+type Section = 'api' | 'voice' | 'git' | 'appearance'
+
+const S = {
+  overlay: {
+    position: 'fixed' as const,
+    inset: 0,
+    zIndex: 50,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    background: 'rgba(0,0,0,0.75)',
+    backdropFilter: 'blur(4px)',
+    padding: '16px',
+  },
+  modal: {
+    width: '100%',
+    maxWidth: '500px',
+    maxHeight: '90vh',
+    background: 'var(--bg)',
+    border: '1px solid rgba(0,255,65,0.25)',
+    borderRadius: '12px',
+    display: 'flex',
+    flexDirection: 'column' as const,
+    overflow: 'hidden',
+    boxShadow: '0 20px 60px rgba(0,0,0,0.7)',
+  },
+  header: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: '16px 20px',
+    borderBottom: '1px solid rgba(0,255,65,0.15)',
+    flexShrink: 0,
+  },
+  title: {
+    fontFamily: 'monospace',
+    fontSize: '12px',
+    fontWeight: 600,
+    color: 'var(--text)',
+    letterSpacing: '2px',
+    textTransform: 'uppercase' as const,
+  },
+  closeBtn: {
+    background: 'transparent',
+    border: 'none',
+    cursor: 'pointer',
+    color: 'var(--secondary)',
+    fontSize: '18px',
+    padding: '4px 8px',
+    borderRadius: '6px',
+    lineHeight: 1,
+  },
+  body: {
+    display: 'flex',
+    flex: 1,
+    minHeight: 0,
+  },
+  nav: {
+    width: '120px',
+    borderRight: '1px solid rgba(0,255,65,0.15)',
+    padding: '12px 8px',
+    flexShrink: 0,
+    display: 'flex',
+    flexDirection: 'column' as const,
+    gap: '4px',
+  },
+  navBtn: (active: boolean) => ({
+    width: '100%',
+    padding: '8px 10px',
+    borderRadius: '6px',
+    border: active ? '1px solid rgba(0,255,65,0.3)' : '1px solid transparent',
+    background: active ? 'var(--dim)' : 'transparent',
+    color: active ? 'var(--primary)' : 'var(--secondary)',
+    fontFamily: 'monospace',
+    fontSize: '11px',
+    cursor: 'pointer',
+    textAlign: 'left' as const,
+    transition: 'all 0.15s',
+  }),
+  content: {
+    flex: 1,
+    overflowY: 'auto' as const,
+    padding: '20px',
+    display: 'flex',
+    flexDirection: 'column' as const,
+    gap: '20px',
+  },
+  label: {
+    fontFamily: 'monospace',
+    fontSize: '11px',
+    fontWeight: 500,
+    color: 'rgba(212,245,212,0.7)',
+    marginBottom: '6px',
+    display: 'block',
+  },
+  hint: {
+    fontFamily: 'monospace',
+    fontSize: '10px',
+    color: 'rgba(74,124,89,0.45)',
+    marginTop: '4px',
+  },
+  input: {
+    width: '100%',
+    background: 'var(--dim)',
+    border: '1px solid rgba(0,255,65,0.2)',
+    borderRadius: '8px',
+    padding: '10px 12px',
+    color: 'var(--text)',
+    fontFamily: 'monospace',
+    fontSize: '12px',
+    outline: 'none',
+  },
+  pwWrap: {
+    position: 'relative' as const,
+  },
+  showBtn: {
+    position: 'absolute' as const,
+    right: '10px',
+    top: '50%',
+    transform: 'translateY(-50%)',
+    background: 'transparent',
+    border: 'none',
+    cursor: 'pointer',
+    color: 'var(--secondary)',
+    fontSize: '14px',
+    lineHeight: 1,
+  },
+  grid2: {
+    display: 'grid',
+    gridTemplateColumns: '1fr 1fr',
+    gap: '12px',
+  },
+  verifyBtn: {
+    padding: '8px 16px',
+    border: '1px solid rgba(0,255,65,0.35)',
+    borderRadius: '8px',
+    background: 'transparent',
+    color: 'var(--text)',
+    fontFamily: 'monospace',
+    fontSize: '11px',
+    cursor: 'pointer',
+    transition: 'border-color 0.15s',
+  },
+  statusOk: {
+    color: '#4caf50',
+    fontFamily: 'monospace',
+    fontSize: '11px',
+  },
+  statusErr: {
+    color: '#ff6666',
+    fontFamily: 'monospace',
+    fontSize: '11px',
+  },
+  toggleRow: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: '16px',
+  },
+  toggleTrack: (on: boolean) => ({
+    width: '40px',
+    height: '22px',
+    borderRadius: '11px',
+    border: `1px solid ${on ? 'rgba(0,255,65,0.6)' : 'rgba(0,255,65,0.2)'}`,
+    background: on ? 'rgba(0,255,65,0.2)' : 'var(--dim)',
+    cursor: 'pointer',
+    position: 'relative' as const,
+    flexShrink: 0,
+    transition: 'all 0.2s',
+  }),
+  toggleThumb: (on: boolean) => ({
+    position: 'absolute' as const,
+    top: '2px',
+    left: on ? '19px' : '2px',
+    width: '16px',
+    height: '16px',
+    borderRadius: '50%',
+    background: on ? 'var(--primary)' : 'rgba(74,124,89,0.4)',
+    transition: 'left 0.2s',
+  }),
+  themeGrid: {
+    display: 'grid',
+    gridTemplateColumns: '1fr 1fr',
+    gap: '8px',
+  },
+  themeBtn: (active: boolean) => ({
+    padding: '10px',
+    borderRadius: '8px',
+    border: `1px solid ${active ? 'var(--primary)' : 'rgba(0,255,65,0.15)'}`,
+    background: active ? 'var(--dim)' : 'transparent',
+    color: active ? 'var(--primary)' : 'var(--secondary)',
+    fontFamily: 'monospace',
+    fontSize: '11px',
+    cursor: 'pointer',
+    textAlign: 'left' as const,
+    transition: 'all 0.15s',
+  }),
 }
 
-type SettingsSection = 'api' | 'voice' | 'git' | 'appearance'
+function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }): ReactElement {
+  return (
+    <div>
+      <label style={S.label}>{label}</label>
+      {children}
+      {hint && <div style={S.hint}>{hint}</div>}
+    </div>
+  )
+}
+
+function Toggle({ label, desc, value, onChange }: { label: string; desc: string; value: boolean; onChange: (v: boolean) => void }): ReactElement {
+  return (
+    <div style={S.toggleRow}>
+      <div>
+        <div style={S.label}>{label}</div>
+        <div style={S.hint}>{desc}</div>
+      </div>
+      <button role="switch" aria-checked={value} onClick={() => onChange(!value)} style={S.toggleTrack(value)}>
+        <span style={S.toggleThumb(value)} />
+      </button>
+    </div>
+  )
+}
 
 export function SettingsModal({ onClose }: SettingsModalProps): ReactElement {
   const { settings, updateSettings } = useStore()
-  const [activeSection, setActiveSection] = useState<SettingsSection>('api')
-  const [showApiKey, setShowApiKey] = useState<boolean>(false)
-  const [showPat, setShowPat] = useState<boolean>(false)
-  const [gitVerifyState, setGitVerifyState] = useState<'idle' | 'checking' | 'ok' | 'error'>('idle')
-  const [gitVerifyError, setGitVerifyError] = useState<string | null>(null)
+  const [section, setSection] = useState<Section>('api')
+  const [showKey, setShowKey] = useState(false)
+  const [showPat, setShowPat] = useState(false)
+  const [gitStatus, setGitStatus] = useState<'idle'|'checking'|'ok'|'error'>('idle')
+  const [gitErr, setGitErr] = useState<string|null>(null)
 
-  const handleVerifyGit = useCallback(async (): Promise<void> => {
-    setGitVerifyState('checking')
-    setGitVerifyError(null)
-
+  const verifyGit = useCallback(async () => {
+    setGitStatus('checking'); setGitErr(null)
     setCredentialAccessor(() => ({
-      pat: settings.gitPersonalAccessToken,
-      owner: settings.gitRepoOwner,
-      repo: settings.gitRepoName,
-      branch: settings.gitBranch,
-      authorName: settings.gitAuthorName,
-      authorEmail: settings.gitAuthorEmail,
+      pat: settings.gitPersonalAccessToken, owner: settings.gitRepoOwner,
+      repo: settings.gitRepoName, branch: settings.gitBranch,
+      authorName: settings.gitAuthorName, authorEmail: settings.gitAuthorEmail,
     }))
-
-    try {
-      await verifyRepoAccess()
-      setGitVerifyState('ok')
-    } catch (err: unknown) {
-      setGitVerifyState('error')
-      setGitVerifyError(err instanceof Error ? err.message : 'Verification failed')
-    }
+    try { await verifyRepoAccess(); setGitStatus('ok') }
+    catch (e) { setGitStatus('error'); setGitErr(e instanceof Error ? e.message : 'Failed') }
   }, [settings])
 
   const THEMES: { value: Theme; label: string }[] = [
@@ -58,341 +255,120 @@ export function SettingsModal({ onClose }: SettingsModalProps): ReactElement {
     { value: 'minimal', label: 'Minimal' },
   ]
 
-  const NAV: { id: SettingsSection; label: string }[] = [
-    { id: 'api', label: 'API' },
-    { id: 'voice', label: 'Voice' },
-    { id: 'git', label: 'Git Sync' },
-    { id: 'appearance', label: 'Appearance' },
-  ]
-
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
-    >
-      <div className="w-full max-w-xl mx-4 bg-[var(--bg)] border border-[var(--primary)]/30 rounded-xl shadow-2xl flex flex-col max-h-[90vh]">
-
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--primary)]/20">
-          <h2 className="font-mono text-sm font-semibold text-[var(--text)] tracking-wide uppercase">
-            Settings
-          </h2>
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-1.5 rounded-md text-[var(--secondary)] hover:text-[var(--text)] hover:bg-[var(--dim)] transition-colors"
-          >
-            <X className="w-4 h-4" />
-          </button>
+    <div style={S.overlay} onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+      <div style={S.modal}>
+        <div style={S.header}>
+          <div style={S.title}>Settings</div>
+          <button style={S.closeBtn} onClick={onClose}>✕</button>
         </div>
-
-        <div className="flex flex-1 min-h-0">
-          {/* Sidebar nav */}
-          <nav className="w-36 border-r border-[var(--primary)]/20 flex-shrink-0 py-4 px-2">
-            {NAV.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => setActiveSection(item.id)}
-                className={`w-full text-left px-3 py-2 rounded-md text-xs font-mono transition-colors mb-1
-                  ${activeSection === item.id
-                    ? 'bg-[var(--dim)] text-[var(--primary)] border border-[var(--primary)]/30'
-                    : 'text-[var(--secondary)] hover:text-[var(--text)] hover:bg-[var(--dim)]/50'
-                  }`}
-              >
-                {item.label}
+        <div style={S.body}>
+          <nav style={S.nav}>
+            {(['api','voice','git','appearance'] as Section[]).map(s => (
+              <button key={s} style={S.navBtn(section === s)} onClick={() => setSection(s)}>
+                {s === 'api' ? 'API' : s === 'voice' ? 'Voice' : s === 'git' ? 'Git Sync' : 'Appearance'}
               </button>
             ))}
           </nav>
-
-          {/* Content */}
-          <div className="flex-1 overflow-y-auto px-6 py-5">
-
-            {/* ── API ─────────────────────────────────────────────────────── */}
-            {activeSection === 'api' && (
-              <div className="space-y-5">
-                <FieldGroup
-                  label="OpenRouter API Key"
-                  hint="Required for all LLM requests. Get yours at openrouter.ai/keys"
-                >
-                  <div className="relative">
+          <div style={S.content}>
+            {section === 'api' && (
+              <>
+                <Field label="OpenRouter API Key" hint="Get yours at openrouter.ai/keys">
+                  <div style={S.pwWrap}>
                     <input
-                      type={showApiKey ? 'text' : 'password'}
+                      type={showKey ? 'text' : 'password'}
                       value={settings.openRouterApiKey}
-                      onChange={(e) => updateSettings({ openRouterApiKey: e.target.value.trim() })}
+                      onChange={e => updateSettings({ openRouterApiKey: e.target.value.trim() })}
                       placeholder="sk-or-..."
-                      className={INPUT_CLASS}
+                      style={{ ...S.input, paddingRight: '36px' }}
                       spellCheck={false}
-                      autoComplete="off"
                     />
-                    <button
-                      type="button"
-                      onClick={() => setShowApiKey((v) => !v)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--secondary)] hover:text-[var(--text)] transition-colors"
-                    >
-                      {showApiKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                    </button>
+                    <button style={S.showBtn} onClick={() => setShowKey(v => !v)}>{showKey ? '🙈' : '👁'}</button>
                   </div>
-                </FieldGroup>
+                </Field>
 
-                <FieldGroup
-                  label="Default model"
-                  hint="OpenRouter model ID. Examples: anthropic/claude-sonnet-4-6, openai/gpt-4o"
-                >
-                  <input
-                    type="text"
-                    value={settings.gitBranch}
-                    onChange={(e) => updateSettings({ gitBranch: e.target.value.trim() })}
-                    placeholder="anthropic/claude-sonnet-4-6"
-                    className={INPUT_CLASS}
-                    spellCheck={false}
-                  />
-                </FieldGroup>
-              </div>
+              </>
             )}
-
-            {/* ── Voice ────────────────────────────────────────────────────── */}
-            {activeSection === 'voice' && (
-              <div className="space-y-5">
-                <ToggleField
+            {section === 'voice' && (
+              <>
+                <Toggle
                   label="Enable voice input"
-                  description="Show microphone button in chat input. Uses Whisper API for transcription."
+                  desc="Show mic button in chat. Requires Whisper API."
                   value={settings.voiceEnabled}
-                  onChange={(v) => updateSettings({ voiceEnabled: v })}
+                  onChange={v => updateSettings({ voiceEnabled: v })}
                 />
-                <FieldGroup
-                  label="Language"
-                  hint="BCP-47 language tag for transcription. Examples: en, nl, de, fr"
-                >
+                <Field label="Language" hint="BCP-47 tag: en, nl, de, fr, ...">
                   <input
                     type="text"
                     value={settings.voiceLanguage}
-                    onChange={(e) => updateSettings({ voiceLanguage: e.target.value.trim().toLowerCase() })}
+                    onChange={e => updateSettings({ voiceLanguage: e.target.value.trim() })}
                     placeholder="en"
-                    className={INPUT_CLASS}
+                    style={S.input}
                     maxLength={10}
                   />
-                </FieldGroup>
-              </div>
+                </Field>
+              </>
             )}
-
-            {/* ── Git Sync ─────────────────────────────────────────────────── */}
-            {activeSection === 'git' && (
-              <div className="space-y-5">
-                <ToggleField
+            {section === 'git' && (
+              <>
+                <Toggle
                   label="Enable offline sync"
-                  description="Queue conversation backups locally and push to GitHub when online."
+                  desc="Queue conversation backups and push to GitHub when online."
                   value={settings.offlineSyncEnabled}
-                  onChange={(v) => updateSettings({ offlineSyncEnabled: v })}
+                  onChange={v => updateSettings({ offlineSyncEnabled: v })}
                 />
-
-                <FieldGroup label="Personal Access Token" hint="Requires repo write scope.">
-                  <div className="relative">
+                <Field label="Personal Access Token" hint="Requires repo write scope.">
+                  <div style={S.pwWrap}>
                     <input
                       type={showPat ? 'text' : 'password'}
                       value={settings.gitPersonalAccessToken}
-                      onChange={(e) => updateSettings({ gitPersonalAccessToken: e.target.value.trim() })}
+                      onChange={e => updateSettings({ gitPersonalAccessToken: e.target.value.trim() })}
                       placeholder="github_pat_..."
-                      className={INPUT_CLASS}
+                      style={{ ...S.input, paddingRight: '36px' }}
                       spellCheck={false}
-                      autoComplete="off"
                     />
-                    <button
-                      type="button"
-                      onClick={() => setShowPat((v) => !v)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--secondary)] hover:text-[var(--text)] transition-colors"
-                    >
-                      {showPat ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                    </button>
+                    <button style={S.showBtn} onClick={() => setShowPat(v => !v)}>{showPat ? '🙈' : '👁'}</button>
                   </div>
-                </FieldGroup>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <FieldGroup label="Owner" hint="GitHub username or org">
-                    <input
-                      type="text"
-                      value={settings.gitRepoOwner}
-                      onChange={(e) => updateSettings({ gitRepoOwner: e.target.value.trim() })}
-                      placeholder="username"
-                      className={INPUT_CLASS}
-                    />
-                  </FieldGroup>
-                  <FieldGroup label="Repository" hint="Repo name (not full URL)">
-                    <input
-                      type="text"
-                      value={settings.gitRepoName}
-                      onChange={(e) => updateSettings({ gitRepoName: e.target.value.trim() })}
-                      placeholder="my-repo"
-                      className={INPUT_CLASS}
-                    />
-                  </FieldGroup>
+                </Field>
+                <div style={S.grid2}>
+                  <Field label="Owner" hint="GitHub username or org">
+                    <input type="text" value={settings.gitRepoOwner} onChange={e => updateSettings({ gitRepoOwner: e.target.value.trim() })} placeholder="username" style={S.input} />
+                  </Field>
+                  <Field label="Repository">
+                    <input type="text" value={settings.gitRepoName} onChange={e => updateSettings({ gitRepoName: e.target.value.trim() })} placeholder="my-repo" style={S.input} />
+                  </Field>
                 </div>
-
-                <FieldGroup label="Branch" hint="Target branch for commits">
-                  <input
-                    type="text"
-                    value={settings.gitBranch}
-                    onChange={(e) => updateSettings({ gitBranch: e.target.value.trim() })}
-                    placeholder="main"
-                    className={INPUT_CLASS}
-                  />
-                </FieldGroup>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <FieldGroup label="Commit author name" hint="">
-                    <input
-                      type="text"
-                      value={settings.gitAuthorName}
-                      onChange={(e) => updateSettings({ gitAuthorName: e.target.value })}
-                      placeholder="Jarvis"
-                      className={INPUT_CLASS}
-                    />
-                  </FieldGroup>
-                  <FieldGroup label="Commit author email" hint="">
-                    <input
-                      type="email"
-                      value={settings.gitAuthorEmail}
-                      onChange={(e) => updateSettings({ gitAuthorEmail: e.target.value.trim() })}
-                      placeholder="jarvis@local"
-                      className={INPUT_CLASS}
-                    />
-                  </FieldGroup>
-                </div>
-
-                {/* Verify button */}
-                <div className="flex items-center gap-3">
+                <Field label="Branch">
+                  <input type="text" value={settings.gitBranch} onChange={e => updateSettings({ gitBranch: e.target.value.trim() })} placeholder="main" style={S.input} />
+                </Field>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
                   <button
-                    type="button"
-                    onClick={handleVerifyGit}
-                    disabled={
-                      gitVerifyState === 'checking' ||
-                      settings.gitPersonalAccessToken.trim() === '' ||
-                      settings.gitRepoOwner.trim() === '' ||
-                      settings.gitRepoName.trim() === ''
-                    }
-                    className="px-4 py-2 text-xs font-mono border border-[var(--primary)]/40
-                      hover:border-[var(--primary)] rounded-lg transition-colors
-                      disabled:opacity-40 disabled:cursor-not-allowed"
+                    style={S.verifyBtn}
+                    onClick={verifyGit}
+                    disabled={gitStatus === 'checking' || !settings.gitPersonalAccessToken || !settings.gitRepoOwner || !settings.gitRepoName}
                   >
-                    {gitVerifyState === 'checking' ? (
-                      <span className="flex items-center gap-2">
-                        <Loader2 className="w-3 h-3 animate-spin" />
-                        Verifying...
-                      </span>
-                    ) : 'Verify connection'}
+                    {gitStatus === 'checking' ? 'Checking...' : 'Verify connection'}
                   </button>
-
-                  {gitVerifyState === 'ok' && (
-                    <span className="flex items-center gap-1.5 text-xs text-green-400 font-mono">
-                      <CheckCircle className="w-3.5 h-3.5" />
-                      Connected
-                    </span>
-                  )}
-                  {gitVerifyState === 'error' && (
-                    <span className="flex items-center gap-1.5 text-xs text-red-400 font-mono">
-                      <XCircle className="w-3.5 h-3.5" />
-                      {gitVerifyError ?? 'Failed'}
-                    </span>
-                  )}
+                  {gitStatus === 'ok' && <span style={S.statusOk}>✓ Connected</span>}
+                  {gitStatus === 'error' && <span style={S.statusErr}>✕ {gitErr}</span>}
                 </div>
-              </div>
+              </>
             )}
-
-            {/* ── Appearance ───────────────────────────────────────────────── */}
-            {activeSection === 'appearance' && (
-              <div className="space-y-5">
-                <FieldGroup label="Theme" hint="">
-                  <div className="grid grid-cols-2 gap-2">
-                    {THEMES.map((t) => (
-                      <button
-                        key={t.value}
-                        type="button"
-                        onClick={() => updateSettings({ theme: t.value })}
-                        className={`px-3 py-2.5 rounded-lg border text-xs font-mono text-left transition-colors
-                          ${settings.theme === t.value
-                            ? 'border-[var(--primary)] bg-[var(--dim)] text-[var(--primary)]'
-                            : 'border-[var(--primary)]/20 text-[var(--secondary)] hover:border-[var(--primary)]/50 hover:text-[var(--text)]'
-                          }`}
-                      >
-                        {t.label}
-                      </button>
-                    ))}
-                  </div>
-                </FieldGroup>
-              </div>
+            {section === 'appearance' && (
+              <Field label="Theme">
+                <div style={S.themeGrid}>
+                  {THEMES.map(t => (
+                    <button key={t.value} style={S.themeBtn(settings.theme === t.value)} onClick={() => updateSettings({ theme: t.value })}>
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+              </Field>
             )}
-
           </div>
         </div>
-
       </div>
     </div>
   )
 }
 
-// ─── Sub-components ───────────────────────────────────────────────────────────
-
-const INPUT_CLASS =
-  'w-full bg-[var(--dim)] border border-[var(--primary)]/20 rounded-lg px-3 py-2.5 ' +
-  'text-xs font-mono text-[var(--text)] placeholder:text-[var(--secondary)]/40 ' +
-  'focus:outline-none focus:border-[var(--primary)]/60 transition-colors'
-
-function FieldGroup({
-  label,
-  hint,
-  children,
-}: {
-  label: string
-  hint: string
-  children: ReactNode
-}): ReactElement {
-  return (
-    <div className="space-y-1.5">
-      <label className="block text-xs font-mono text-[var(--text)]/80 font-medium">{label}</label>
-      {children}
-      {hint.length > 0 && (
-        <p className="text-[10px] font-mono text-[var(--secondary)]/50">{hint}</p>
-      )}
-    </div>
-  )
-}
-
-function ToggleField({
-  label,
-  description,
-  value,
-  onChange,
-}: {
-  label: string
-  description: string
-  value: boolean
-  onChange: (v: boolean) => void
-}): ReactElement {
-  return (
-    <div className="flex items-start justify-between gap-4">
-      <div>
-        <div className="text-xs font-mono text-[var(--text)]/80 font-medium">{label}</div>
-        <div className="text-[10px] font-mono text-[var(--secondary)]/50 mt-0.5">{description}</div>
-      </div>
-      <button
-        type="button"
-        role="switch"
-        aria-checked={value}
-        onClick={() => onChange(!value)}
-        className={`flex-shrink-0 w-10 h-5 rounded-full border transition-colors relative
-          ${value
-            ? 'bg-[var(--primary)]/30 border-[var(--primary)]/60'
-            : 'bg-[var(--dim)] border-[var(--primary)]/20'
-          }`}
-      >
-        <span
-          className={`absolute top-0.5 w-4 h-4 rounded-full transition-transform
-            ${value
-              ? 'translate-x-5 bg-[var(--primary)]'
-              : 'translate-x-0.5 bg-[var(--secondary)]/40'
-            }`}
-        />
-      </button>
-    </div>
-  )
-}

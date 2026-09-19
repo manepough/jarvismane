@@ -1,29 +1,9 @@
 'use client'
 
-/**
- * src/components/ChatInput.tsx
- * Chat input bar with:
- *  - Text textarea (auto-resize, Shift+Enter newline)
- *  - Voice record/stop button
- *  - File/image attachment button (multi-select)
- *  - Attachment preview strip with remove controls
- *  - Send and abort streaming buttons
- *  - Offline status indicator
- *
- * No business logic here. All API calls route through openrouter.ts.
- * All file processing routes through AttachmentService.ts.
- */
-
 import {
-  useState,
-  useRef,
-  useEffect,
-  useCallback,
-  type KeyboardEvent,
-  type ChangeEvent,
-  type ReactElement,
+  useState, useRef, useEffect, useCallback,
+  type KeyboardEvent, type ChangeEvent, type ReactElement,
 } from 'react'
-import { Send, Square, Mic, MicOff, Paperclip, X, Loader2, WifiOff } from 'lucide-react'
 import { useStore } from '@/store'
 import { streamMessage } from '@/lib/openrouter'
 import { processUserFile, downloadAttachment } from '@/services/AttachmentService'
@@ -31,84 +11,169 @@ import { useVoice } from '@/hooks/useVoice'
 import type { Attachment } from '@/types'
 import { AttachmentSizeLimitError, AttachmentTypeError } from '@/types'
 
-// ─── Component ────────────────────────────────────────────────────────────────
+const S = {
+  bar: {
+    borderTop: '1px solid rgba(0,255,65,0.2)',
+    background: 'rgba(17,22,17,0.7)',
+    padding: '12px 16px',
+    flexShrink: 0,
+  },
+  inner: {
+    maxWidth: '800px',
+    margin: '0 auto',
+    display: 'flex',
+    flexDirection: 'column' as const,
+    gap: '8px',
+  },
+  attachRow: {
+    display: 'flex',
+    flexWrap: 'wrap' as const,
+    gap: '8px',
+  },
+  chip: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    padding: '4px 10px',
+    borderRadius: '6px',
+    border: '1px solid rgba(0,255,65,0.25)',
+    background: 'rgba(17,22,17,0.9)',
+    maxWidth: '180px',
+    fontFamily: 'monospace',
+    fontSize: '10px',
+    color: 'var(--text)',
+  },
+  chipName: {
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap' as const,
+    cursor: 'pointer',
+    flex: 1,
+  },
+  chipX: {
+    background: 'transparent',
+    border: 'none',
+    cursor: 'pointer',
+    color: 'rgba(74,124,89,0.6)',
+    fontSize: '12px',
+    padding: '0',
+    lineHeight: 1,
+    flexShrink: 0,
+  },
+  inputRow: {
+    display: 'flex',
+    alignItems: 'flex-end',
+    gap: '8px',
+  },
+  iconBtn: (active?: boolean, danger?: boolean) => ({
+    flexShrink: 0,
+    padding: '10px',
+    borderRadius: '8px',
+    border: `1px solid ${danger ? 'rgba(255,68,68,0.5)' : active ? 'rgba(255,68,68,0.6)' : 'rgba(0,255,65,0.25)'}`,
+    background: danger ? 'rgba(255,68,68,0.1)' : active ? 'rgba(255,68,68,0.12)' : 'transparent',
+    color: (active || danger) ? '#ff6666' : 'var(--secondary)',
+    cursor: 'pointer',
+    fontSize: '16px',
+    lineHeight: 1,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    transition: 'all 0.15s',
+    animation: active ? 'pulse 1s ease-in-out infinite' : 'none',
+  }),
+  textarea: {
+    flex: 1,
+    resize: 'none' as const,
+    background: 'var(--bg)',
+    border: '1px solid rgba(0,255,65,0.25)',
+    borderRadius: '8px',
+    padding: '10px 14px',
+    color: 'var(--text)',
+    fontFamily: 'monospace',
+    fontSize: '13px',
+    lineHeight: '1.5',
+    minHeight: '44px',
+    maxHeight: '200px',
+    outline: 'none',
+    transition: 'border-color 0.15s',
+  },
+  status: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    fontFamily: 'monospace',
+    fontSize: '10px',
+    color: 'rgba(74,124,89,0.5)',
+    padding: '0 2px',
+  },
+  errText: {
+    color: '#ff6666',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+  },
+  streamText: {
+    color: 'rgba(0,255,65,0.6)',
+  },
+}
 
 export function ChatInput(): ReactElement {
   const {
-    currentConversationId,
-    currentConversation,
-    personas,
-    currentPersonaId,
-    settings,
-    isStreaming,
-    networkStatus,
-    addMessage,
-    updateMessageContent,
-    finalizeStreamingMessage,
-    setIsStreaming,
-    setStreamingMessageId,
+    currentConversationId, currentConversation, personas, currentPersonaId,
+    settings, isStreaming, networkStatus,
+    addMessage, updateMessageContent, finalizeStreamingMessage,
+    setIsStreaming, setStreamingMessageId,
   } = useStore()
 
-  const [inputText, setInputText] = useState<string>('')
+  const [inputText, setInputText] = useState('')
   const [pendingAttachments, setPendingAttachments] = useState<Attachment[]>([])
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
-
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const abortControllerRef = useRef<AbortController | null>(null)
+  const abortRef = useRef<AbortController | null>(null)
 
-  const persona = personas.find((p) => p.id === currentPersonaId) ?? { id: "jarvis", name: "Jarvis", description: "Your personal assistant.", tone: "professional", coreDirective: "", systemPrompt: "", emoji: "", color: "#00ff41" }
+  const persona = personas.find(p => p.id === currentPersonaId) ?? {
+    id: 'jarvis', name: 'Jarvis', description: '', tone: '', coreDirective: '',
+    systemPrompt: 'You are Jarvis, a direct and capable personal assistant.',
+    emoji: '', color: '#00ff41',
+  }
 
-  // Auto-resize textarea
   useEffect(() => {
     const el = textareaRef.current
-    if (el === null) return
+    if (!el) return
     el.style.height = 'auto'
-    el.style.height = `${Math.min(el.scrollHeight, 240)}px`
+    el.style.height = Math.min(el.scrollHeight, 200) + 'px'
   }, [inputText])
 
-  // When voice produces a transcript, fill the input
-  const handleTranscriptReady = useCallback((transcript: string): void => {
-    setInputText((prev) => (prev.trim().length === 0 ? transcript : `${prev} ${transcript}`))
+  const onTranscript = useCallback((t: string) => {
+    setInputText(prev => prev.trim() ? `${prev} ${t}` : t)
     textareaRef.current?.focus()
   }, [])
 
-  const voice = useVoice(handleTranscriptReady)
+  const voice = useVoice(onTranscript)
 
-  // ── Submission ──────────────────────────────────────────────────────────────
-
-  const handleSubmit = useCallback(async (): Promise<void> => {
+  const handleSubmit = useCallback(async () => {
     const text = inputText.trim()
-    if ((text.length === 0 && pendingAttachments.length === 0) || isStreaming) return
-    if (currentConversationId === null) return
+    if ((!text && pendingAttachments.length === 0) || isStreaming || !currentConversationId) return
 
-    const attachmentsCopy = [...pendingAttachments]
+    const atts = [...pendingAttachments]
     setInputText('')
     setPendingAttachments([])
     setAttachmentError(null)
 
-    // Add user message
-    addMessage(currentConversationId, {
-      role: 'user',
-      content: text,
-      attachments: attachmentsCopy,
-    })
-
-    // Add placeholder assistant message
-    const assistantMessageId = addMessage(currentConversationId, {
-      role: 'assistant',
-      content: '',
+    addMessage(currentConversationId, { role: 'user', content: text, attachments: atts })
+    const assistantId = addMessage(currentConversationId, {
+      role: 'assistant', content: '',
       model: currentConversation?.model ?? 'anthropic/claude-sonnet-4-6',
       persona: persona.id,
     })
 
     setIsStreaming(true)
-    setStreamingMessageId(assistantMessageId)
+    setStreamingMessageId(assistantId)
 
-    const controller = new AbortController()
-    abortControllerRef.current = controller
-
-    let accumulated = ''
+    const ctrl = new AbortController()
+    abortRef.current = ctrl
+    let acc = ''
 
     await streamMessage(
       {
@@ -116,323 +181,137 @@ export function ChatInput(): ReactElement {
         systemPrompt: persona.systemPrompt,
         model: currentConversation?.model ?? 'anthropic/claude-sonnet-4-6',
         apiKey: settings.openRouterApiKey,
-        attachments: attachmentsCopy,
-        signal: controller.signal,
+        attachments: atts,
+        signal: ctrl.signal,
       },
       {
-        onToken: (token: string) => {
-          accumulated += token
-          updateMessageContent(currentConversationId, assistantMessageId, accumulated)
-        },
-        onDone: (fullContent: string) => {
-          updateMessageContent(currentConversationId, assistantMessageId, fullContent)
-          finalizeStreamingMessage(currentConversationId, assistantMessageId)
-          abortControllerRef.current = null
-        },
-        onError: (error: Error) => {
-          updateMessageContent(
-            currentConversationId,
-            assistantMessageId,
-            `Error: ${error.message}`,
-            { errorDetail: error.message, isStreaming: false }
-          )
-          finalizeStreamingMessage(currentConversationId, assistantMessageId)
-          abortControllerRef.current = null
-        },
+        onToken: (t) => { acc += t; updateMessageContent(currentConversationId, assistantId, acc) },
+        onDone: (full) => { updateMessageContent(currentConversationId, assistantId, full); finalizeStreamingMessage(currentConversationId, assistantId); abortRef.current = null },
+        onError: (err) => { updateMessageContent(currentConversationId, assistantId, `Error: ${err.message}`, { errorDetail: err.message, isStreaming: false }); finalizeStreamingMessage(currentConversationId, assistantId); abortRef.current = null },
       }
     )
-  }, [
-    inputText,
-    pendingAttachments,
-    isStreaming,
-    currentConversationId,
-    currentConversation,
-    persona,
-    settings,
-    addMessage,
-    updateMessageContent,
-    finalizeStreamingMessage,
-    setIsStreaming,
-    setStreamingMessageId,
-  ])
+  }, [inputText, pendingAttachments, isStreaming, currentConversationId, currentConversation, persona, settings, addMessage, updateMessageContent, finalizeStreamingMessage, setIsStreaming, setStreamingMessageId])
 
-  const handleAbort = useCallback((): void => {
-    if (abortControllerRef.current !== null) {
-      abortControllerRef.current.abort()
-      abortControllerRef.current = null
-    }
-  }, [])
+  const handleKeyDown = useCallback((e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSubmit() }
+  }, [handleSubmit])
 
-  const handleKeyDown = useCallback(
-    (e: KeyboardEvent<HTMLTextAreaElement>): void => {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault()
-        handleSubmit()
-      }
-    },
-    [handleSubmit]
-  )
-
-  // ── File Attachment ─────────────────────────────────────────────────────────
-
-  const handleFileChange = useCallback(async (e: ChangeEvent<HTMLInputElement>): Promise<void> => {
+  const handleFileChange = useCallback(async (e: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? [])
-    if (files.length === 0) return
-    // Reset input so the same file can be re-selected
     e.target.value = ''
-
     setAttachmentError(null)
-
-    const processed: Attachment[] = []
     for (const file of files) {
       try {
-        const attachment = await processUserFile(file, 'user')
-        processed.push(attachment)
-      } catch (err: unknown) {
+        const att = await processUserFile(file, 'user')
+        setPendingAttachments(prev => [...prev, att])
+      } catch (err) {
         if (err instanceof AttachmentSizeLimitError || err instanceof AttachmentTypeError) {
           setAttachmentError(err.message)
-        } else {
-          setAttachmentError(`Failed to process "${file.name}": ${err instanceof Error ? err.message : 'unknown error'}`)
         }
       }
     }
-
-    if (processed.length > 0) {
-      setPendingAttachments((prev) => [...prev, ...processed])
-    }
   }, [])
 
-  const removeAttachment = useCallback((id: string): void => {
-    setPendingAttachments((prev) => prev.filter((a) => a.id !== id))
-  }, [])
-
-  const isDisabled = settings.openRouterApiKey.trim() === '' && networkStatus !== 'offline'
-
-  // ── Render ──────────────────────────────────────────────────────────────────
+  const isDisabled = settings.openRouterApiKey.trim() === ''
 
   return (
-    <div className="border-t border-[var(--primary)]/30 bg-[var(--dim)]/60 px-4 py-3">
-      <div className="max-w-4xl mx-auto space-y-2">
-
-        {/* Attachment error */}
-        {attachmentError !== null && (
-          <div className="text-xs text-red-400 font-mono px-1 flex items-center gap-2">
-            <span>{attachmentError}</span>
-            <button onClick={() => setAttachmentError(null)} className="text-red-400/60 hover:text-red-400">
-              <X className="w-3 h-3" />
-            </button>
+    <div style={S.bar}>
+      <div style={S.inner}>
+        {attachmentError && (
+          <div style={{ ...S.errText, fontFamily: 'monospace', fontSize: '11px' }}>
+            {attachmentError}
+            <button style={S.chipX} onClick={() => setAttachmentError(null)}>✕</button>
           </div>
         )}
 
-        {/* Pending attachment strip */}
         {pendingAttachments.length > 0 && (
-          <div className="flex flex-wrap gap-2">
-            {pendingAttachments.map((att) => (
-              <AttachmentChip
-                key={att.id}
-                attachment={att}
-                onRemove={() => removeAttachment(att.id)}
-              />
+          <div style={S.attachRow}>
+            {pendingAttachments.map(att => (
+              <div key={att.id} style={S.chip}>
+                {att.mediaType.startsWith('image/') && att.previewUrl && (
+                  <img src={att.previewUrl} alt="" style={{ width: 20, height: 20, objectFit: 'cover', borderRadius: 3 }} />
+                )}
+                <button style={S.chipName} onClick={() => downloadAttachment(att)} title={att.filename}>
+                  {att.filename.length > 18 ? att.filename.slice(0, 16) + '...' : att.filename}
+                </button>
+                <button style={S.chipX} onClick={() => setPendingAttachments(p => p.filter(a => a.id !== att.id))}>✕</button>
+              </div>
             ))}
           </div>
         )}
 
-        {/* Input row */}
-        <div className="flex items-end gap-2">
-
-          {/* File picker */}
+        <div style={S.inputRow}>
           <input
             ref={fileInputRef}
             type="file"
             multiple
             accept="image/*,application/pdf,text/plain,text/markdown,application/json,audio/*,video/mp4"
-            className="hidden"
+            style={{ display: 'none' }}
             onChange={handleFileChange}
           />
           <button
-            type="button"
+            style={S.iconBtn()}
             onClick={() => fileInputRef.current?.click()}
             disabled={isStreaming}
-            title="Attach file or image"
-            className="flex-shrink-0 p-2.5 rounded-lg border border-[var(--primary)]/30
-              hover:border-[var(--primary)]/70 hover:bg-[var(--dim)]
-              transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            title="Attach file"
           >
-            <Paperclip className="w-4 h-4 text-[var(--secondary)]" />
+            📎
           </button>
 
-          {/* Textarea */}
-          <div className="flex-1 relative">
-            <textarea
-              ref={textareaRef}
-              value={inputText}
-              onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setInputText(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder={
-                networkStatus === 'offline'
-                  ? 'Offline mode -- local commands only'
-                  : isDisabled
-                  ? 'Add your OpenRouter API key in Settings'
-                  : 'Type a message... (Shift+Enter for new line)'
-              }
-              disabled={isStreaming}
-              rows={1}
-              className="w-full resize-none bg-[var(--bg)] border border-[var(--primary)]/30
-                rounded-lg px-4 py-3 pr-3 text-[var(--text)] placeholder:text-[var(--secondary)]/50
-                focus:outline-none focus:border-[var(--primary)]/70
-                disabled:opacity-50 font-mono text-sm
-                transition-colors"
-              style={{ minHeight: '48px', maxHeight: '240px' }}
-            />
-          </div>
+          <textarea
+            ref={textareaRef}
+            value={inputText}
+            onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setInputText(e.target.value)}
+            onKeyDown={handleKeyDown}
+            onFocus={e => { e.target.style.borderColor = 'rgba(0,255,65,0.6)' }}
+            onBlur={e => { e.target.style.borderColor = 'rgba(0,255,65,0.25)' }}
+            placeholder={
+              networkStatus === 'offline' ? 'Offline mode — local commands only' :
+              isDisabled ? 'Add your OpenRouter API key in Settings' :
+              'Type a message... (Enter to send, Shift+Enter for newline)'
+            }
+            disabled={isStreaming}
+            rows={1}
+            style={S.textarea}
+          />
 
-          {/* Voice button */}
           {settings.voiceEnabled && (
-            <VoiceButton voice={voice} disabled={isStreaming} />
+            <button
+              style={S.iconBtn(voice.transcriptionState === 'recording')}
+              onClick={() => voice.transcriptionState === 'recording' ? voice.stopVoiceInput() : voice.startVoiceInput()}
+              disabled={isStreaming || voice.transcriptionState === 'transcribing'}
+              title={voice.transcriptionState === 'recording' ? 'Stop recording' : 'Voice input'}
+            >
+              {voice.transcriptionState === 'transcribing' ? '⏳' : voice.transcriptionState === 'recording' ? '⏹' : '🎤'}
+            </button>
           )}
 
-          {/* Send / Stop */}
           {isStreaming ? (
-            <button
-              type="button"
-              onClick={handleAbort}
-              title="Stop generation"
-              className="flex-shrink-0 p-2.5 rounded-lg border border-red-500/50
-                bg-red-500/10 hover:bg-red-500/20 transition-colors"
-            >
-              <Square className="w-4 h-4 text-red-400" />
+            <button style={S.iconBtn(false, true)} onClick={() => { abortRef.current?.abort(); abortRef.current = null }} title="Stop">
+              ⏹
             </button>
           ) : (
             <button
-              type="button"
+              style={S.iconBtn()}
               onClick={handleSubmit}
-              disabled={
-                (inputText.trim().length === 0 && pendingAttachments.length === 0) || isDisabled
-              }
-              title="Send message"
-              className="flex-shrink-0 p-2.5 rounded-lg border border-[var(--primary)]/30
-                hover:border-[var(--primary)] hover:bg-[var(--dim)]
-                transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              disabled={(inputText.trim() === '' && pendingAttachments.length === 0) || isDisabled}
+              title="Send"
             >
-              <Send className="w-4 h-4 text-[var(--primary)]" />
+              ➤
             </button>
           )}
         </div>
 
-        {/* Status bar */}
-        <div className="flex items-center justify-between text-[10px] font-mono text-[var(--secondary)]/60 px-1">
-          <div className="flex items-center gap-3">
-            {networkStatus === 'offline' && (
-              <span className="flex items-center gap-1 text-yellow-500/80">
-                <WifiOff className="w-3 h-3" />
-                offline
-              </span>
-            )}
-            {isStreaming && (
-              <span className="flex items-center gap-1 text-[var(--primary)]/70">
-                <Loader2 className="w-3 h-3 animate-spin" />
-                generating
-              </span>
-            )}
-            {voice.transcriptionState === 'transcribing' && (
-              <span className="text-cyan-400/70">transcribing audio...</span>
-            )}
-            {voice.errorMessage !== null && (
-              <span className="text-red-400/80">{voice.errorMessage}</span>
-            )}
+        <div style={S.status}>
+          <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+            {networkStatus === 'offline' && <span style={{ color: '#ffcc00' }}>● offline</span>}
+            {isStreaming && <span style={S.streamText}>generating...</span>}
+            {voice.transcriptionState === 'transcribing' && <span style={{ color: '#4dd0e1' }}>transcribing...</span>}
+            {voice.errorMessage && <span style={{ color: '#ff6666' }}>{voice.errorMessage}</span>}
           </div>
-          <span>
-            {inputText.length > 0 ? `${inputText.length} chars` : ''}
-          </span>
+          {inputText.length > 0 && <span>{inputText.length} chars</span>}
         </div>
       </div>
-    </div>
-  )
-}
-
-// ─── Sub-components ───────────────────────────────────────────────────────────
-
-interface VoiceButtonProps {
-  voice: ReturnType<typeof useVoice>
-  disabled: boolean
-}
-
-function VoiceButton({ voice, disabled }: VoiceButtonProps): ReactElement {
-  const isActive = voice.transcriptionState === 'recording'
-  const isProcessing = voice.transcriptionState === 'transcribing'
-
-  const handleClick = (): void => {
-    if (isActive) {
-      voice.stopVoiceInput()
-    } else {
-      voice.startVoiceInput()
-    }
-  }
-
-  return (
-    <button
-      type="button"
-      onClick={handleClick}
-      disabled={disabled || isProcessing}
-      title={isActive ? 'Stop recording' : 'Start voice input'}
-      className={`flex-shrink-0 p-2.5 rounded-lg border transition-colors
-        disabled:opacity-40 disabled:cursor-not-allowed
-        ${isActive
-          ? 'border-red-500/70 bg-red-500/15 text-red-400 animate-pulse'
-          : isProcessing
-          ? 'border-cyan-500/50 bg-cyan-500/10 text-cyan-400'
-          : 'border-[var(--primary)]/30 hover:border-[var(--primary)]/70 hover:bg-[var(--dim)]'
-        }`}
-    >
-      {isProcessing ? (
-        <Loader2 className="w-4 h-4 animate-spin" />
-      ) : isActive ? (
-        <MicOff className="w-4 h-4" />
-      ) : (
-        <Mic className="w-4 h-4 text-[var(--secondary)]" />
-      )}
-    </button>
-  )
-}
-
-interface AttachmentChipProps {
-  attachment: Attachment
-  onRemove: () => void
-}
-
-function AttachmentChip({ attachment, onRemove }: AttachmentChipProps): ReactElement {
-  const isImage = attachment.mediaType.startsWith('image/')
-
-  return (
-    <div className="flex items-center gap-1.5 px-2 py-1 rounded-md
-      border border-[var(--primary)]/30 bg-[var(--dim)]/80 max-w-[200px]">
-      {isImage && attachment.previewUrl !== null ? (
-        <img
-          src={attachment.previewUrl}
-          alt={attachment.filename}
-          className="w-6 h-6 object-cover rounded"
-        />
-      ) : (
-        <Paperclip className="w-3 h-3 text-[var(--secondary)] flex-shrink-0" />
-      )}
-      <button
-        type="button"
-        onClick={() => downloadAttachment(attachment)}
-        className="text-[10px] font-mono text-[var(--text)]/80 truncate hover:text-[var(--primary)] transition-colors"
-        title={`${attachment.filename} (${attachment.sizeLabel}) — click to download`}
-      >
-        {attachment.filename.length > 20
-          ? `${attachment.filename.slice(0, 18)}...`
-          : attachment.filename}
-      </button>
-      <button
-        type="button"
-        onClick={onRemove}
-        className="flex-shrink-0 text-[var(--secondary)]/60 hover:text-red-400 transition-colors"
-        title="Remove attachment"
-      >
-        <X className="w-3 h-3" />
-      </button>
     </div>
   )
 }
