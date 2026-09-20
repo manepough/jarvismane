@@ -24,17 +24,19 @@ import com.jarvis.shizuku.ShizukuBridge;
 /**
  * MainActivity — hosts the Jarvis Next.js web app inside a WebView.
  *
- * In production the WebView loads the bundled Next.js static export from assets.
- * In development it points to the local Next.js dev server.
- *
- * JS <-> Native bridge:
- *   window.JarvisBridge.executeShizukuCommand(argsJson) → JSON result string
- *   window.JarvisBridge.hasShizukuPermission()          → "true"/"false"
+ * OAuth callback interception:
+ * When OpenRouter redirects to any URL containing "?code=", we intercept it
+ * inside the WebView and inject the code into the page via JavaScript,
+ * instead of opening an external browser or requiring a real callback domain.
  */
 public class MainActivity extends AppCompatActivity {
 
     private static final String PROD_URL = "file:///android_asset/web/index.html";
     private static final String DEV_URL  = "http://10.0.2.2:3000";
+
+    // The callback URL we register with OpenRouter OAuth
+    // Must match what WelcomeScreen.tsx sends as callback_url
+    private static final String OAUTH_CALLBACK_HOST = "jarvis.local";
 
     private WebView webView;
     private ValueCallback<Uri[]> fileChooserCallback;
@@ -87,8 +89,24 @@ public class MainActivity extends AppCompatActivity {
                     @NonNull WebResourceRequest request
             ) {
                 final String url = request.getUrl().toString();
+                final Uri uri = request.getUrl();
+
+                // Intercept OAuth callback — any URL with ?code= coming back
+                // from openrouter.ai or our jarvis.local callback host
+                if (isOAuthCallback(uri)) {
+                    final String code = uri.getQueryParameter("code");
+                    if (code != null && !code.isEmpty()) {
+                        handleOAuthCode(code);
+                        return true; // Don't navigate
+                    }
+                }
+
                 // Open external URLs in system browser
                 if (!url.startsWith("file://") && !url.startsWith("http://10.0.2.2")) {
+                    // Let openrouter.ai auth pages load inside WebView
+                    if (url.contains("openrouter.ai")) {
+                        return false; // Load inside WebView
+                    }
                     final Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
                     startActivity(intent);
                     return true;
@@ -100,7 +118,6 @@ public class MainActivity extends AppCompatActivity {
         webView.setWebChromeClient(new WebChromeClient() {
             @Override
             public void onPermissionRequest(@NonNull PermissionRequest request) {
-                // Grant microphone access for voice input
                 request.grant(request.getResources());
             }
 
@@ -116,6 +133,38 @@ public class MainActivity extends AppCompatActivity {
                 fileChooserCallback = filePathCallback;
                 filePickerLauncher.launch(new String[]{"*/*"});
                 return true;
+            }
+        });
+    }
+
+    /**
+     * Check if a URI is our OAuth callback.
+     * Matches: jarvis.local/auth/callback?code=...
+     * or any redirect back that contains a code= parameter from openrouter.ai
+     */
+    private boolean isOAuthCallback(@NonNull Uri uri) {
+        final String host = uri.getHost();
+        final String path = uri.getPath();
+        return (OAUTH_CALLBACK_HOST.equals(host) && "/auth/callback".equals(path))
+                || (uri.toString().contains("auth/callback") && uri.getQueryParameter("code") != null);
+    }
+
+    /**
+     * Inject the OAuth authorization code into the WebView's localStorage
+     * so WelcomeScreen.tsx can pick it up via its polling interval.
+     */
+    private void handleOAuthCode(@NonNull String code) {
+        final String sanitizedCode = code.replaceAll("[^A-Za-z0-9._\\-]", "");
+        final String js = "javascript:(function(){"
+                + "try{"
+                + "localStorage.setItem('or_oauth_code','" + sanitizedCode + "');"
+                + "window.location.href='/';"
+                + "}catch(e){console.error('OAuth inject error:',e);}"
+                + "})()";
+
+        runOnUiThread(() -> {
+            if (webView != null) {
+                webView.loadUrl(js);
             }
         });
     }
@@ -152,22 +201,12 @@ public class MainActivity extends AppCompatActivity {
             return String.valueOf(ShizukuBridge.hasPermission());
         }
 
-        /**
-         * Execute a Shizuku shell command from JavaScript.
-         *
-         * @param argsJson JSON array string e.g. '["am","start","-n","com.pkg/.Activity"]'
-         * @return JSON result string: {"exitCode":0,"stdout":"...","stderr":"...","durationMs":42}
-         *         or error JSON: {"error":"SHIZUKU_PERMISSION","message":"..."}
-         */
         @JavascriptInterface
         @NonNull
         public String executeShizukuCommand(@NonNull String argsJson) {
             try {
-                // Parse JSON array manually to avoid adding a JSON dependency
                 final String[] args = parseJsonStringArray(argsJson);
-                if (args.length == 0) {
-                    return errorJson("INVALID_ARGS", "args array is empty");
-                }
+                if (args.length == 0) return errorJson("INVALID_ARGS", "args array is empty");
 
                 final ShizukuBridge.CommandResult result =
                         ShizukuBridge.executeCommandBlocking(args);
@@ -193,19 +232,16 @@ public class MainActivity extends AppCompatActivity {
         @NonNull
         private static String[] parseJsonStringArray(@NonNull String json) {
             final String trimmed = json.trim();
-            if (!trimmed.startsWith("[") || !trimmed.endsWith("]")) {
+            if (!trimmed.startsWith("[") || !trimmed.endsWith("]"))
                 throw new IllegalArgumentException("Expected JSON array");
-            }
             final String inner = trimmed.substring(1, trimmed.length() - 1).trim();
             if (inner.isEmpty()) return new String[0];
-
             final String[] parts = inner.split(",(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)");
             final String[] result = new String[parts.length];
             for (int i = 0; i < parts.length; i++) {
                 String part = parts[i].trim();
-                if (part.startsWith("\"") && part.endsWith("\"")) {
+                if (part.startsWith("\"") && part.endsWith("\""))
                     part = part.substring(1, part.length() - 1);
-                }
                 result[i] = part.replace("\\\"", "\"").replace("\\\\", "\\");
             }
             return result;
@@ -213,17 +249,14 @@ public class MainActivity extends AppCompatActivity {
 
         @NonNull
         private static String errorJson(@NonNull String code, @NonNull String message) {
-            return "{\"error\":" + jsonString(code) + ",\"message\":" + jsonString(message) + "}";
+            return "{\"error\":" + jsonString(code) + ",\"message\":" + jsonString(message != null ? message : "") + "}";
         }
 
         @NonNull
         private static String jsonString(@NonNull String value) {
             return "\"" + value
-                    .replace("\\", "\\\\")
-                    .replace("\"", "\\\"")
-                    .replace("\n", "\\n")
-                    .replace("\r", "\\r")
-                    .replace("\t", "\\t")
+                    .replace("\\", "\\\\").replace("\"", "\\\"")
+                    .replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
                     + "\"";
         }
     }
