@@ -10,9 +10,9 @@ interface WelcomeScreenProps {
 // OpenRouter OAuth PKCE flow
 // Docs: https://openrouter.ai/docs/oauth
 const OR_OAUTH_URL = 'https://openrouter.ai/auth'
-const APP_CALLBACK = typeof window !== 'undefined'
-  ? `${window.location.origin}/auth/callback`
-  : 'http://localhost:3000/auth/callback'
+// jarvis.local/auth/callback is intercepted by the Android WebView
+// in MainActivity.java — it never actually loads that domain
+const APP_CALLBACK = 'https://jarvis.local/auth/callback'
 
 async function generatePKCE(): Promise<{ codeVerifier: string; codeChallenge: string }> {
   const array = new Uint8Array(32)
